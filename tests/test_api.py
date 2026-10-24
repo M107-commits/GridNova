@@ -112,6 +112,9 @@ def test_owner_scope_duplicate_commitment_and_cancel_ledger(client):
     assert len(rows) == 1 and rows[0]["status"] == "cancelled"
     assert next(h for h in client.get("/api/households").json() if h["id"] == 1)["surplus_wh"] == 4000
     assert any(e["action"] == "trade_cancelled" for e in client.get("/api/audit-events", headers=owner(2)).json())
+    replay = client.post("/api/offers/1/purchase", headers=keyed_headers, json=payload)
+    assert replay.status_code == 201 and replay.json()["status"] == "cancelled"
+    assert next(h for h in client.get("/api/households").json() if h["id"] == 1)["surplus_wh"] == 4000
 
 def test_certificate_uniqueness_and_reviewer_permissions(client):
     data = {"household_id": 1, "quantity_wh": 1200, "source": "solar",
@@ -317,3 +320,19 @@ def test_verifier_cannot_run_audited_simulation_and_sim_input_is_bounded(client)
     assert too_many.status_code == 422
     after = client.get("/api/audit-events", headers={"X-Demo-Role": "admin"}).json()
     assert len(after) == len(before)
+
+
+def test_generation_rejection_is_audited_and_final(client):
+    submitted = client.post("/api/generation-records", headers=owner(4), json={
+        "household_id": 4, "quantity_wh": 900, "source": "solar"})
+    assert submitted.status_code == 201
+    reviewer = {"X-Demo-Role": "verifier"}
+    rejected = client.post(f"/api/generation-records/{submitted.json()['id']}/reject",
+        headers=reviewer, json={"note": "Synthetic demo rejection"})
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "rejected"
+    retry = client.post(f"/api/generation-records/{submitted.json()['id']}/verify",
+        headers=reviewer, json={"note": "late"})
+    assert retry.status_code == 409
+    events = client.get("/api/audit-events", headers={"X-Demo-Role": "admin"}).json()
+    assert any(event["action"] == "generation_rejected" for event in events)
