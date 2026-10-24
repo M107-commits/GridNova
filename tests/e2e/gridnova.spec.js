@@ -10,7 +10,7 @@ async function signup(page, { name, home, email }) {
   await page.locator("#signupPassword").fill("GridNova-test-password");
   await page.locator("#signupCity").selectOption("Bengaluru");
   await page.locator("#signupLocality").fill("Indiranagar");
-  await page.locator("#signupForm button[type=submit]").click();
+  await page.locator("#signupForm button.primary").click();
   await expect(page.locator("#app")).toBeVisible();
   await expect(page.locator("#authScreen")).toBeHidden();
 }
@@ -77,8 +77,8 @@ test("desktop: separate buyer and seller accounts, trade ledger, settings, simul
   await expect(page.locator("#toast")).toContainText("Settings saved");
 
   await page.locator('#sidenav [data-page="simulator"]').click();
-  await page.locator("#solarInput").fill("60");
-  await page.locator("#demandInput").fill("45");
+  await page.locator("#solarInput").evaluate(el => { el.value = "60"; el.dispatchEvent(new Event("input", { bubbles: true })); });
+  await page.locator("#demandInput").evaluate(el => { el.value = "45"; el.dispatchEvent(new Event("input", { bubbles: true })); });
   await page.locator("#runSimulation").click();
   await expect(page.locator("#simResult")).toContainText("POTENTIAL ENERGY TO SHARE");
 
