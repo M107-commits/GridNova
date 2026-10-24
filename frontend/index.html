@@ -39,7 +39,7 @@
 </section></main>
 <div id="app" hidden>
 <header class="top"><div class="brand"><div class="mark">↗</div><div>GridNova<small>CONNECTED ENERGY, REIMAGINED</small></div></div>
-<div class="topcontrols"><label class="sr-only" for="household">Choose a sample household</label><select id="household" class="select" aria-label="Choose a sample household"></select></div></header>
+<div class="topcontrols"><span id="accountName" class="muted" style="font-size:11px"></span><button id="signOut" class="btn ghost">Sign out</button></div></header>
 <div class="shell"><aside class="sidebar"><div class="label">YOUR ENERGY</div><nav id="sidenav" class="nav" aria-label="Primary navigation">
 <button class="active" data-page="overview"><i>⌂</i>Overview</button>
 <button data-page="market"><i>⇄</i>Buy energy</button>
@@ -60,14 +60,16 @@
 </main></div>
 <nav class="mobile-nav" id="mobileNav" aria-label="Primary navigation"><button class="active" data-page="overview"><i>⌂</i>Home</button><button data-page="market"><i>⇄</i>Buy</button><button data-page="my-energy"><i>☼</i>Sell</button><button data-page="transactions"><i>↗</i>Activity</button><button data-page="verification"><i>✓</i>Impact</button><button data-page="simulator"><i>⌘</i>Sim</button><button data-page="settings"><i>⚙</i>Settings</button></nav>
 <footer class="notice" style="max-width:1500px;margin:0 auto 16px;padding:0 34px 12px">GridNova is a simulation using fictional households. No electricity or money is exchanged.</footer>
+</div>
 <dialog id="dialog" aria-labelledby="dialogTitle"><div id="dialogBody"></div></dialog><div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 <script>
-const API="/api";let homes=[],currentPage="overview",tradeCache=[];
+const API="/api";let homes=[],currentPage="overview",tradeCache=[],currentAccount=null;
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 const money=p=>new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:2}).format((p||0)/100);
 const energy=wh=>((wh||0)/1000).toLocaleString("en-IN",{maximumFractionDigits:2})+" kWh";
 function offerStatusName(status){return ({open:"Open",partially_filled:"Partially filled",expired:"Expired",withdrawn:"Withdrawn",filled:"Filled"})[status]||status||"Unavailable"}
-function headers(){return {"Content-Type":"application/json","X-Demo-Role":"homeowner","X-Household-Id":$("#household").value||""}}
+function csrfToken(){return document.cookie.split("; ").find(x=>x.startsWith("gridnova_csrf="))?.split("=")[1]||""}
+function headers(){return {"Content-Type":"application/json","X-CSRF-Token":decodeURIComponent(csrfToken())}}
 async function api(path,opts={}){let r;try{r=await fetch(API+path,{...opts,headers:{...headers(),...(opts.headers||{})}})}catch(e){throw new Error("Could not reach GridNova API. Start the backend and try again.")}let data;try{data=await r.json()}catch{data=await r.text()}if(!r.ok)throw new Error(typeof data==="object"?(data.detail||JSON.stringify(data)):data);return data}
 function toast(msg,error=false){const t=$("#toast");t.textContent=msg;t.style.background=error?"#ffaaa0":"#d3fa7d";t.classList.add("show");setTimeout(()=>t.classList.remove("show"),3200)}
 $("#shopEnergy").onclick=()=>go("market");$("#sellEnergy").onclick=()=>{go("market");setTimeout(()=>$("#listOffer").click(),0)};
