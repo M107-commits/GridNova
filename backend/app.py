@@ -392,11 +392,9 @@ def update_energy(household_id: int, payload: HouseholdEnergyUpdate,
 @app.get("/api/dashboard")
 def dashboard(household_id: int | None = Query(default=None), ctx: dict = Depends(role_context),
               db: Session = Depends(get_db)):
-    selected_id = household_id or ctx["household_id"] or 1
-    if ctx["role"] == "homeowner":
-        owner_id = ctx["household_id"] or 1
-        if selected_id != owner_id:
-            raise HTTPException(403, "Select your own household in the demo selector")
+    selected_id = household_id or ctx["household_id"]
+    if ctx["role"] != "admin" and selected_id != ctx["household_id"]:
+        raise HTTPException(403, "You can only view your signed-in household")
     selected = db.get(Household, selected_id)
     if not selected:
         raise HTTPException(404, "Household not found")
@@ -425,8 +423,9 @@ def offers(household_id: int | None = None, seller_household_id: int | None = No
         require_household(db, seller_household_id, ctx)
         stmt = select(Offer).where(Offer.household_id == seller_household_id).order_by(Offer.created_at.desc())
         return [serialize_offer(db, offer) for offer in db.scalars(stmt)]
+    own_household = db.get(Household, ctx["household_id"])
     stmt = select(Offer).join(Household, Offer.household_id == Household.id).where(
-        Offer.status == "open", Household.share_surplus.is_(True)).order_by(Offer.price_paise_per_kwh)
+        Offer.status == "open", Household.share_surplus.is_(True), Household.city == own_household.city).order_by(Offer.price_paise_per_kwh)
     if household_id is not None:
         stmt = stmt.where(Offer.household_id != household_id)
     return [serialize_offer(db, offer) for offer in db.scalars(stmt)
@@ -501,6 +500,8 @@ def purchase_offer(offer_id: int, payload: PurchaseRequest,
             raise HTTPException(404, "Offer is no longer available")
         if seller.id == buyer.id:
             raise HTTPException(409, "A household cannot purchase its own surplus")
+        if seller.city != buyer.city:
+            raise HTTPException(409, "Energy offers are only available within your city")
         if payload.quantity_wh > offer_available(db, offer):
             raise HTTPException(409, "Purchase exceeds the offer's available quantity")
         if payload.quantity_wh > current_demand(db, buyer):
@@ -531,9 +532,9 @@ def trades(household_id: int | None = None, status: str | None = None,
            search: str | None = None, ctx: dict = Depends(role_context), db: Session = Depends(get_db)):
     stmt = select(Trade).order_by(Trade.created_at.desc())
     if ctx["role"] == "homeowner":
-        selected_id = ctx["household_id"] or 1
+        selected_id = ctx["household_id"]
         if household_id is not None and household_id != selected_id:
-            raise HTTPException(403, "You can only view trades for the selected household")
+            raise HTTPException(403, "You can only view trades for your signed-in household")
         household_id = selected_id
     if household_id is not None:
         stmt = stmt.where((Trade.seller_id == household_id) | (Trade.buyer_id == household_id))
@@ -582,7 +583,7 @@ def generation_records(household_id: int | None = None, status: str | None = Non
     if ctx["role"] == "homeowner":
         selected_id = ctx["household_id"] or 1
         if household_id is not None and household_id != selected_id:
-            raise HTTPException(403, "You can only view records for the selected household")
+            raise HTTPException(403, "You can only view records for your signed-in household")
         household_id = selected_id
     if household_id is not None:
         stmt = stmt.where(GenerationRecord.household_id == household_id)
@@ -655,7 +656,7 @@ def audit_events(household_id: int | None = None, limit: int = Query(default=100
     if ctx["role"] == "homeowner":
         selected_id = ctx["household_id"] or 1
         if household_id is not None and household_id != selected_id:
-            raise HTTPException(403, "You can only view audit events for the selected household")
+            raise HTTPException(403, "You can only view audit events for your signed-in household")
         household_id = selected_id
     if household_id is not None:
         stmt = stmt.where(AuditEvent.household_id == household_id)
@@ -686,6 +687,8 @@ def run_simulation(payload: SimulationRequest, ctx: dict = Depends(role_context)
                    db: Session = Depends(get_db)):
     if ctx["role"] == "verifier":
         raise HTTPException(403, "Verifier role is review-only")
+    if payload.household_ids and ctx["role"] == "homeowner" and set(payload.household_ids) != {ctx["household_id"]}:
+        raise HTTPException(403, "The simulator can only use your household profile")
     homes = list(db.scalars(select(Household).where(
         Household.id.in_(payload.household_ids) if payload.household_ids else True)))
     if not homes:
@@ -759,7 +762,7 @@ def export_trades(household_id: int | None = None, ctx: dict = Depends(role_cont
     if ctx["role"] == "homeowner":
         selected_id = ctx["household_id"] or 1
         if household_id is not None and household_id != selected_id:
-            raise HTTPException(403, "You can only export trades for the selected household")
+            raise HTTPException(403, "You can only export trades for your signed-in household")
         household_id = selected_id
     output = io.StringIO()
     writer = csv.writer(output)
