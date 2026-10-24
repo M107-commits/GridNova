@@ -89,6 +89,7 @@ class UserAccount(Base):
     id = Column(Integer, primary_key=True)
     household_id = Column(Integer, ForeignKey("households.id", ondelete="CASCADE"), nullable=False)
     email = Column(String(254), nullable=False, unique=True, index=True)
+    display_name = Column(String(100), nullable=False)
     password_hash = Column(String(256), nullable=False)
     role = Column(String(20), nullable=False, default="homeowner")
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
