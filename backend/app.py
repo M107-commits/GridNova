@@ -1,13 +1,14 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
+import ipaddress
+import os
 from decimal import Decimal, ROUND_HALF_UP
 import json
 from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -95,7 +96,9 @@ def role_context(x_demo_role: str = Header(default="homeowner"),
         raise HTTPException(400, "Demo role must be homeowner, verifier, or admin")
     return {"role": role, "household_id": x_household_id}
 
-def require_household(db: Session, household_id: int, ctx: dict, allow_admin: bool = False):
+def require_household(db: Session, household_id: int, ctx: dict):
+    if ctx["role"] == "verifier":
+        raise HTTPException(403, "Verifier role is review-only")
     if ctx["role"] != "admin" and ctx["household_id"] != household_id:
         raise HTTPException(403, "Select this household in the demo household selector to act for it")
     h = db.get(Household, household_id)
@@ -156,8 +159,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="GridNova API", version="1.0.0",
               description="Fictional peer-to-peer renewable energy marketplace simulation.",
               lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
-                   allow_headers=["*"])
+REMOTE_DEMO_ENABLED = os.getenv("GRIDNOVA_ALLOW_REMOTE_DEMO", "").lower() in {"1", "true", "yes"}\n\n@app.middleware("http")\nasync def local_demo_boundary(request, call_next):\n    host = request.client.host if request.client else ""\n    try:\n        is_loopback = ipaddress.ip_address(host).is_loopback\n    except ValueError:\n        is_loopback = host == "testclient"\n    if not is_loopback and not REMOTE_DEMO_ENABLED:\n        return JSONResponse(status_code=403, content={\n            "detail": "GridNova demo API is restricted to loopback clients. Remote demo mode is explicitly insecure."\n        })\n    return await call_next(request)
 
 @app.get("/api/health")
 def health():
@@ -340,7 +342,7 @@ def cancel_trade(trade_id: int, ctx: dict = Depends(role_context), db: Session =
         trade = db.get(Trade, trade_id)
         if not trade:
             raise HTTPException(404, "Trade not found")
-        if ctx["role"] != "admin" and ctx["household_id"] not in {trade.seller_id, trade.buyer_id}:
+        if ctx["role"] == "verifier":\n            raise HTTPException(403, "Verifier role cannot cancel household trades")\n        if ctx["role"] != "admin" and ctx["household_id"] not in {trade.seller_id, trade.buyer_id}:
             raise HTTPException(403, "Only a participating household can cancel this trade")
         if trade.status != "completed":
             raise HTTPException(409, "Only completed demo trades can be cancelled")
@@ -516,6 +518,7 @@ def reset_demo(ctx: dict = Depends(role_context), db: Session = Depends(get_db))
     db.execute(text("BEGIN IMMEDIATE"))
     try:
         db.query(Trade).delete()
+        db.query(Offer).delete()
         db.query(GenerationRecord).delete()
         db.query(HouseholdSetting).delete()
         db.query(Household).delete()
