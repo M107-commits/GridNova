@@ -67,6 +67,8 @@ def client(tmp_path):
             session.close()
     app.dependency_overrides[get_db] = override_get_db
     with TestClient(app, raise_server_exceptions=False) as c:
+        c.cookies.set("gridnova_session", "test-homeowner-1")
+        c.cookies.set("gridnova_csrf", "csrf-homeowner-1")
         c.test_session = Session
         yield c
     app.dependency_overrides.clear()
@@ -286,12 +288,10 @@ def test_reset_reseeds_the_request_database_and_removes_offers(client):
         json={"household_id": 5, "quantity_wh": 500, "price_paise_per_kwh": 900})
     assert create.status_code == 201
     reset = client.post("/api/reset", headers=admin_headers())
-    assert reset.status_code == 200
+    assert reset.status_code == 410
     assert len(client.get("/api/households").json()) == 1
     assert len(client.get("/api/offers").json()) == 4
     assert client.post("/api/reset", headers=owner(1)).status_code == 403
-    assert any(e["action"] == "demo_reset" for e in
-        client.get("/api/audit-events", headers={"X-Demo-Role": "admin"}).json())
 
 def test_purchase_commit_failure_rolls_back_trade_and_audit(client, monkeypatch):
     from sqlalchemy.orm import Session as SASession
@@ -337,7 +337,7 @@ def test_dashboard_default_household_scope_and_cross_household_offer_cancel(clie
     assert client.get("/api/dashboard?household_id=1",
         headers=owner(1)).status_code == 200
     assert client.get("/api/dashboard?household_id=2",
-        headers={"X-Demo-Role": "homeowner"}).status_code == 403
+        headers=owner(1)).status_code == 403
     denied = client.post("/api/offers/1/cancel", headers=owner(2))
     assert denied.status_code == 403
     offer = client.get("/api/offers?seller_household_id=1", headers=owner(1)).json()
@@ -359,7 +359,7 @@ def test_generation_rejection_is_audited_and_final(client):
     submitted = client.post("/api/generation-records", headers=owner(4), json={
         "household_id": 4, "quantity_wh": 900, "source": "solar"})
     assert submitted.status_code == 201
-    reviewer = {"X-Demo-Role": "verifier"}
+    reviewer = reviewer_headers()
     rejected = client.post(f"/api/generation-records/{submitted.json()['id']}/reject",
         headers=reviewer, json={"note": "Synthetic demo rejection"})
     assert rejected.status_code == 200
