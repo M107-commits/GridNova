@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from .database import Base, SessionLocal, engine, get_db
 from .models import AuditEvent, GenerationRecord, Household, HouseholdSetting, Offer, Trade
@@ -128,20 +128,20 @@ def require_reviewer(ctx: dict):
         raise HTTPException(403, "This action requires the demo verifier role")
 
 def seed(target_engine=engine):
-    """Create or migrate the schema and seed the supplied database."""
+    """Create or migrate and seed the supplied database."""
     Base.metadata.create_all(bind=target_engine)
     household_columns = {column["name"] for column in inspect(target_engine).get_columns("households")}
     if "offer_limit_wh" not in household_columns:
         with target_engine.begin() as connection:
             connection.execute(text("ALTER TABLE households ADD COLUMN offer_limit_wh INTEGER NOT NULL DEFAULT 100000"))
     trade_columns = {column["name"] for column in inspect(target_engine).get_columns("trades")}
-    with engine.begin() as connection:
+    with target_engine.begin() as connection:
         if "offer_id" not in trade_columns:
             connection.execute(text("ALTER TABLE trades ADD COLUMN offer_id INTEGER REFERENCES offers(id)"))
         if "idempotency_key" not in trade_columns:
             connection.execute(text("ALTER TABLE trades ADD COLUMN idempotency_key VARCHAR(120)"))
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_trades_idempotency_key ON trades(idempotency_key)"))
-        target_session = sessionmaker(bind=target_engine, autoflush=False, expire_on_commit=False)
+    target_session = sessionmaker(bind=target_engine, autoflush=False, expire_on_commit=False)
     with target_session() as db:
         if db.scalar(select(func.count(Household.id))) == 0:
             for name, city, locality, generation, consumption, source in CITIES:
