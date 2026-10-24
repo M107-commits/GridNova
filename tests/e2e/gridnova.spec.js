@@ -127,7 +127,7 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   await page.locator("#household").selectOption("2");
   await page.locator('#sidenav [data-page="settings"]').click();
   await page.locator('#settingsForm [name="preferred_price_paise"]').fill("1337");
-  await page.locator("#settingsForm button[type=submit]").click();
+  await page.locator("#settingsForm button.primary").click();
   await expect(page.locator("#toast")).toContainText("Settings saved");
   await page.locator('#sidenav [data-page="simulator"]').click();
   await page.locator("#solarInput").fill("60");
