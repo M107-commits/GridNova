@@ -1,25 +1,43 @@
 # GridNova — A New Era of Connected Energy
 
-GridNova is a polished, interactive concept demo for a peer-to-peer renewable energy marketplace for Indian neighborhoods. It uses fictional household profiles and synthetic energy data to show how surplus generation might be shared locally.
+GridNova is a local-first web application concept for a peer-to-peer renewable-energy marketplace for Indian households. It includes a FastAPI + SQLAlchemy + SQLite API and a responsive vanilla HTML/CSS/JavaScript client. The five seeded households are fictional and located in Bengaluru, Hyderabad, Pune, Chennai, and Jaipur.
 
 ## Run locally
 
-No build step or dependencies are required. Download or clone the repository, then open `index.html` in a modern browser. For a local web server, run:
+Use Python 3.10 or newer.
 
 ```sh
-python -m http.server 8000
+python -m venv .venv
+# macOS/Linux
+source .venv/bin/activate
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn backend.app:app --reload
 ```
 
-Then visit http://localhost:8000.
+Open http://127.0.0.1:8000 for the client and http://127.0.0.1:8000/docs for the API. The database is created as `gridnova.db` in the working directory on first startup. Set `GRIDNOVA_DATABASE_URL` to use a different SQLAlchemy database URL. The UI calls the same-origin `/api` endpoints.
 
-## Demo interactions
+## Test
 
-- Browse and filter fictional solar and wind offers, and sort by price, distance, or newest.
-- Simulate buying energy; the offer quantity and transaction history update in the page.
-- List the demo household’s surplus from the marketplace.
-- Adjust solar output and household demand in the microgrid simulator.
-- Change the household’s simulated surplus-sharing preference and explore the overview, profile, activity, and settings views.
+```sh
+pytest -q
+```
 
-## Important
+The API tests use an isolated temporary SQLite database and exercise household scope, generation reference uniqueness, review permissions, round-half-up paise accounting, duplicate commitments, cancellation and release, audit persistence, simulator/settings persistence, and concurrent purchases.
 
-This is a simulation only. It does not access real meters, exchange electricity, process payments, verify generation, issue renewable-energy certificates, or claim regulatory approval. All profiles, prices, activity, and environmental impact estimates are illustrative synthetic data.
+## Application features
+
+- **Overview:** API-backed household and community generation, consumption, surplus, demand, trade activity, and illustrative impact estimates.
+- **Energy Marketplace:** live surplus offers, source/city search and sorting, listing, and purchase dialogs.
+- **My Energy:** edit synthetic generation/consumption, set a price, and submit generation records.
+- **Transactions:** search and filter persistent trades, inspect details, cancel eligible trades, and export CSV.
+- **Verification & Impact:** verifier-role review actions, generation records, community analytics, and clearly labeled impact estimates.
+- **Microgrid Simulator:** adjustable solar and demand inputs with server-computed share potential.
+- **Settings:** household sharing/rate preferences and admin demo reset.
+
+The role selector is a presentation/demo feature, not authentication or production authorization. API ownership checks demonstrate the intended boundary only; do not deploy this demo as a secure multi-user service without real authentication and authorization.
+
+## Simulation limits
+
+All household profiles, generation values, offers, prices, trades, and environmental estimates are fictional/synthetic. A purchase only creates a demo ledger entry; it does not transfer electricity or money. The application does not connect to real meters, validate physical generation, issue official renewable-energy certificates, or claim regulatory approval. “Verified” is an internal demo review status only.
