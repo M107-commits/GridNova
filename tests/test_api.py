@@ -138,7 +138,7 @@ def test_simulation_and_settings_are_persisted_and_audited(client):
 
 def test_competing_purchases_cannot_oversell(client):
     def buy(household_id):
-        return client.post("/api/offers/1/purchase", headers=owner(household_id),
+        return client.post("/api/offers/1/purchase", headers=purchase_headers(household_id, f"parallel-key-{household_id}"),
             json={"buyer_household_id": household_id, "quantity_wh": 3000}).status_code
     with ThreadPoolExecutor(max_workers=2) as pool:
         codes = list(pool.map(buy, [2, 3]))
