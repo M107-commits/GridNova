@@ -48,12 +48,29 @@ def is_expired(expires_at: datetime) -> bool:
     return expires_at <= datetime.now(timezone.utc)
 
 def offer_available(db: Session, offer: Offer) -> int:
+    seller = db.get(Household, offer.household_id)
+    if not seller or not seller.share_surplus:
+        return 0
+    now = datetime.now(timezone.utc)
     if offer.status != "open" or is_expired(offer.expires_at):
         return 0
-    committed = db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
-        Trade.offer_id == offer.id, Trade.status == "completed")) or 0
-    seller = db.get(Household, offer.household_id)
-    return min(max(0, offer.quantity_wh - int(committed)), current_available(db, seller))
+    remaining_physical = current_available(db, seller)
+    ordered = db.scalars(select(Offer).where(
+        Offer.household_id == seller.id, Offer.status == "open").order_by(Offer.id))
+    for candidate in ordered:
+        if is_expired(candidate.expires_at):
+            continue
+        sold = db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
+            Trade.offer_id == candidate.id, Trade.status == "completed")) or 0
+        candidate_remaining = max(0, candidate.quantity_wh - int(sold))
+        allocated = min(candidate_remaining, remaining_physical)
+        if candidate.id == offer.id:
+            return allocated
+        remaining_physical -= allocated
+        if remaining_physical <= 0:
+            return 0
+    return 0
+
 
 def current_demand(db: Session, household: Household) -> int:
     bought = db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
