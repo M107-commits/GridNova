@@ -131,3 +131,14 @@ def test_competing_purchases_cannot_oversell(client):
     assert sorted(codes) == [201, 409]
     seller = next(h for h in client.get("/api/households").json() if h["id"] == 1)
     assert seller["surplus_wh"] == 1000
+
+def test_household_scoped_reads(client):
+    create = client.post("/api/generation-records", headers=owner(1),
+        json={"household_id": 1, "quantity_wh": 600, "source": "solar"})
+    assert create.status_code == 201
+    own = client.get("/api/generation-records", headers=owner(1))
+    assert all(r["household_id"] == 1 for r in own.json())
+    denied = client.get("/api/generation-records?household_id=2", headers=owner(1))
+    assert denied.status_code == 403
+    cross_trades = client.get("/api/trades?household_id=2", headers=owner(1))
+    assert cross_trades.status_code == 403
