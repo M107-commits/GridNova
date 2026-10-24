@@ -61,7 +61,7 @@ function openGuidedTour(){
   });
 }
 $("#quickTour").onclick=openGuidedTour;
-function go(page){currentPage=page;$(".view").forEach(v=>v.classList.toggle("active",v.id===page));$("[data-page]").forEach(b=>{const active=b.dataset.page===page;b.classList.toggle("active",active);if(active)b.setAttribute("aria-current","page");else b.removeAttribute("aria-current")});loadPage(page)}
+function go(page){currentPage=page;$$(".view").forEach(v=>v.classList.toggle("active",v.id===page));$$("[data-page]").forEach(b=>{const active=b.dataset.page===page;b.classList.toggle("active",active);if(active)b.setAttribute("aria-current","page");else b.removeAttribute("aria-current")});loadPage(page)}
 $$("[data-page]").forEach(b=>b.onclick=()=>go(b.dataset.page));
 function selected(){return Number($("#household").value||1)}
 async function init(){try{homes=await api("/households");$("#household").innerHTML=homes.map(h=>'<option value="'+h.id+'">'+esc(h.name)+' · '+esc(h.city)+'</option>').join("");if(!homes.length)throw new Error("No seeded households were returned.");await loadAll()}catch(e){toast(e.message,true);$("#overviewBody").innerHTML='<div class="card empty">API unavailable: '+esc(e.message)+'<br><br>Run <code>uvicorn backend.app:app --reload</code> from the repository root.</div>'}}
