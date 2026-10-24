@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 import json
 from pathlib import Path
@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .database import Base, SessionLocal, engine, get_db
-from .models import AuditEvent, GenerationRecord, Household, HouseholdSetting, Trade
+from .models import AuditEvent, GenerationRecord, Household, HouseholdSetting, Offer, Trade
 from .schemas import (GenerationCreate, HouseholdEnergyUpdate, OfferCreate,
                       PurchaseRequest, ReviewRequest, SettingsUpdate,
                       SimulationRequest)
@@ -39,9 +39,15 @@ def audit(db: Session, role: str, action: str, entity: str, entity_id: int | Non
 def current_available(db: Session, household: Household) -> int:
     committed = db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
         Trade.seller_id == household.id, Trade.status == "completed")) or 0
-    physical = max(0, household.generation_wh - household.consumption_wh - int(committed))
-    remaining_listing = max(0, household.offer_limit_wh - int(committed))
-    return min(physical, remaining_listing)
+    return max(0, household.generation_wh - household.consumption_wh - int(committed))
+
+def offer_available(db: Session, offer: Offer) -> int:
+    if offer.status != "open" or offer.expires_at <= datetime.now(timezone.utc):
+        return 0
+    committed = db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
+        Trade.offer_id == offer.id, Trade.status == "completed")) or 0
+    seller = db.get(Household, offer.household_id)
+    return min(max(0, offer.quantity_wh - int(committed)), current_available(db, seller))
 
 def current_demand(db: Session, household: Household) -> int:
     bought = db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
@@ -63,8 +69,18 @@ def serialize_trade(t: Trade, seller: Household, buyer: Household):
             "seller_city": seller.city, "buyer_id": t.buyer_id, "buyer_name": buyer.name,
             "buyer_city": buyer.city, "quantity_wh": t.quantity_wh,
             "price_paise_per_kwh": t.price_paise_per_kwh, "total_paise": t.total_paise,
-            "status": t.status, "created_at": t.created_at.isoformat(),
+            "offer_id": t.offer_id, "status": t.status, "created_at": t.created_at.isoformat(),
             "cancelled_at": t.cancelled_at.isoformat() if t.cancelled_at else None}
+
+def serialize_offer(db: Session, offer: Offer):
+    seller = db.get(Household, offer.household_id)
+    return {"id": offer.id, "household_id": seller.id, "seller_household_id": seller.id,
+            "seller_name": seller.name, "city": seller.city, "locality": seller.locality,
+            "source": seller.source, "quantity_wh": offer_available(db, offer),
+            "listed_quantity_wh": offer.quantity_wh,
+            "price_paise_per_kwh": offer.price_paise_per_kwh,
+            "status": offer.status, "created_at": offer.created_at.isoformat(),
+            "expires_at": offer.expires_at.isoformat()}
 
 def role_context(x_demo_role: str = Header(default="homeowner"),
                  x_household_id: Optional[int] = Header(default=None)):
@@ -88,33 +104,44 @@ def require_reviewer(ctx: dict):
 
 def seed():
     Base.metadata.create_all(bind=engine)
-    # Additive migration for databases created before the offer cap was introduced.
     household_columns = {column["name"] for column in inspect(engine).get_columns("households")}
     if "offer_limit_wh" not in household_columns:
         with engine.begin() as connection:
-            connection.execute(text(
-                "ALTER TABLE households ADD COLUMN offer_limit_wh INTEGER NOT NULL DEFAULT 100000"
-            ))
+            connection.execute(text("ALTER TABLE households ADD COLUMN offer_limit_wh INTEGER NOT NULL DEFAULT 100000"))
+    trade_columns = {column["name"] for column in inspect(engine).get_columns("trades")}
+    with engine.begin() as connection:
+        if "offer_id" not in trade_columns:
+            connection.execute(text("ALTER TABLE trades ADD COLUMN offer_id INTEGER REFERENCES offers(id)"))
+        if "idempotency_key" not in trade_columns:
+            connection.execute(text("ALTER TABLE trades ADD COLUMN idempotency_key VARCHAR(120)"))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_trades_idempotency_key ON trades(idempotency_key)"))
     with SessionLocal() as db:
         if db.scalar(select(func.count(Household.id))) == 0:
             for name, city, locality, generation, consumption, source in CITIES:
-                h = Household(name=name, city=city, locality=locality, source=source,
-                              capacity_wh=8000, generation_wh=generation,
-                              consumption_wh=consumption, preferred_price_paise=1200,
-                              share_surplus=True)
-                db.add(h)
+                db.add(Household(name=name, city=city, locality=locality, source=source,
+                    capacity_wh=8000, generation_wh=generation, consumption_wh=consumption,
+                    preferred_price_paise=1200, share_surplus=True))
             db.flush()
             db.add_all([
                 GenerationRecord(household_id=1, quantity_wh=7200, source="solar", status="pending"),
                 GenerationRecord(household_id=2, quantity_wh=2600, source="solar",
-                                 certificate_reference="DEMO-HYD-001", status="pending"),
-                GenerationRecord(household_id=3, quantity_wh=5400, source="solar", status="verified",
-                                 reviewed_by="verifier"),
+                    certificate_reference="DEMO-HYD-001", status="pending"),
+                GenerationRecord(household_id=3, quantity_wh=5400, source="solar",
+                    status="verified", reviewed_by="verifier"),
                 GenerationRecord(household_id=4, quantity_wh=6100, source="solar", status="pending"),
-                GenerationRecord(household_id=5, quantity_wh=4900, source="solar", status="verified",
-                                 reviewed_by="verifier"),
+                GenerationRecord(household_id=5, quantity_wh=4900, source="solar",
+                    status="verified", reviewed_by="verifier"),
             ])
-            db.commit()
+        if (db.scalar(select(func.count(Offer.id))) or 0) == 0:
+            for h in db.scalars(select(Household)):
+                committed = db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
+                    Trade.seller_id == h.id, Trade.status == "completed")) or 0
+                qty = max(0, h.generation_wh - h.consumption_wh - int(committed))
+                if h.share_surplus and qty:
+                    db.add(Offer(household_id=h.id, quantity_wh=qty,
+                        price_paise_per_kwh=h.preferred_price_paise, status="open",
+                        expires_at=datetime.now(timezone.utc) + timedelta(days=7)))
+        db.commit()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -175,68 +202,103 @@ def dashboard(household_id: int | None = Query(default=None), ctx: dict = Depend
     }
 
 @app.get("/api/offers")
-def offers(household_id: int | None = None, db: Session = Depends(get_db)):
-    stmt = select(Household).where(Household.share_surplus.is_(True)).order_by(Household.preferred_price_paise)
-    if household_id is not None:
-        stmt = stmt.where(Household.id != household_id)
-    results = []
-    for h in db.scalars(stmt):
-        qty = current_available(db, h)
-        if qty:
-            results.append({"id": h.id, "household_id": h.id, "seller_name": h.name,
-                "city": h.city, "locality": h.locality, "source": h.source,
-                "quantity_wh": qty, "price_paise_per_kwh": h.preferred_price_paise})
-    return results
+def offers(household_id: int | None = None, seller_household_id: int | None = None,
+           ctx: dict = Depends(role_context), db: Session = Depends(get_db)):
+    stmt = select(Offer).where(Offer.status == "open").order_by(Offer.price_paise_per_kwh)
+    if seller_household_id is not None:
+        require_household(db, seller_household_id, ctx)
+        stmt = stmt.where(Offer.household_id == seller_household_id)
+    elif household_id is not None:
+        stmt = stmt.where(Offer.household_id != household_id)
+    return [serialize_offer(db, offer) for offer in db.scalars(stmt)
+            if offer_available(db, offer) > 0]
 
 @app.post("/api/offers", status_code=201)
 def create_offer(payload: OfferCreate, ctx: dict = Depends(role_context), db: Session = Depends(get_db)):
-    h = require_household(db, payload.household_id, ctx)
-    if not h.share_surplus:
-        raise HTTPException(409, "Surplus sharing is paused for this household")
-    sold = db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
-        Trade.seller_id == h.id, Trade.status == "completed")) or 0
-    physical = max(0, h.generation_wh - h.consumption_wh - int(sold))
-    if payload.quantity_wh > physical:
-        raise HTTPException(409, "Offer quantity exceeds available surplus")
-    h.offer_limit_wh = int(sold) + payload.quantity_wh
-    h.preferred_price_paise = payload.price_paise_per_kwh
-    audit(db, ctx["role"], "offer_listed", "household", h.id, h.id,
-          {"quantity_wh": payload.quantity_wh, "price_paise_per_kwh": payload.price_paise_per_kwh})
-    db.commit()
-    return {"household_id": h.id, "available_quantity_wh": current_available(db, h),
-            "price_paise_per_kwh": h.preferred_price_paise}
+    db.execute(text("BEGIN IMMEDIATE"))
+    try:
+        h = require_household(db, payload.household_id, ctx)
+        if not h.share_surplus:
+            raise HTTPException(409, "Surplus sharing is paused for this household")
+        physical = current_available(db, h)
+        open_listed = sum(offer_available(db, offer) for offer in db.scalars(
+            select(Offer).where(Offer.household_id == h.id, Offer.status == "open")))
+        if payload.quantity_wh > max(0, physical - open_listed):
+            raise HTTPException(409, "Offer quantity exceeds unlisted available surplus")
+        offer = Offer(household_id=h.id, quantity_wh=payload.quantity_wh,
+            price_paise_per_kwh=payload.price_paise_per_kwh, status="open",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=payload.expires_in_hours))
+        db.add(offer)
+        db.flush()
+        audit(db, ctx["role"], "offer_listed", "offer", offer.id, h.id,
+              {"quantity_wh": payload.quantity_wh,
+               "price_paise_per_kwh": payload.price_paise_per_kwh,
+               "expires_at": offer.expires_at.isoformat()})
+        db.commit()
+        return serialize_offer(db, offer)
+    except Exception:
+        db.rollback()
+        raise
+
+@app.post("/api/offers/{offer_id}/cancel")
+def cancel_offer(offer_id: int, ctx: dict = Depends(role_context), db: Session = Depends(get_db)):
+    db.execute(text("BEGIN IMMEDIATE"))
+    try:
+        offer = db.get(Offer, offer_id)
+        if not offer:
+            raise HTTPException(404, "Offer not found")
+        require_household(db, offer.household_id, ctx)
+        if offer.status != "open":
+            raise HTTPException(409, "Only open offers can be withdrawn")
+        offer.status = "cancelled"
+        audit(db, ctx["role"], "offer_cancelled", "offer", offer.id, offer.household_id)
+        db.commit()
+        return serialize_offer(db, offer)
+    except Exception:
+        db.rollback()
+        raise
 
 @app.post("/api/offers/{offer_id}/purchase", status_code=201)
 def purchase_offer(offer_id: int, payload: PurchaseRequest,
+                   idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=120),
                    ctx: dict = Depends(role_context), db: Session = Depends(get_db)):
-    # BEGIN IMMEDIATE serializes competing writers in SQLite before quantities are read.
     db.execute(text("BEGIN IMMEDIATE"))
     try:
         buyer = require_household(db, payload.buyer_household_id, ctx)
-        seller = db.get(Household, offer_id)
-        if not seller or not seller.share_surplus:
-            raise HTTPException(404, "Offer not found or no longer available")
+        previous = db.scalar(select(Trade).where(Trade.idempotency_key == idempotency_key))
+        if previous:
+            if (previous.offer_id, previous.buyer_id, previous.quantity_wh) != (
+                    offer_id, buyer.id, payload.quantity_wh):
+                raise HTTPException(409, "Idempotency key was already used for a different purchase")
+            seller = db.get(Household, previous.seller_id)
+            db.commit()
+            return serialize_trade(previous, seller, buyer)
+        offer = db.get(Offer, offer_id)
+        if not offer or offer.status != "open" or offer.expires_at <= datetime.now(timezone.utc):
+            raise HTTPException(404, "Offer not found, expired, or withdrawn")
+        seller = db.get(Household, offer.household_id)
+        if not seller.share_surplus:
+            raise HTTPException(404, "Offer is no longer available")
         if seller.id == buyer.id:
             raise HTTPException(409, "A household cannot purchase its own surplus")
-        if payload.quantity_wh > current_available(db, seller):
-            raise HTTPException(409, "Purchase exceeds the seller's available surplus")
+        if payload.quantity_wh > offer_available(db, offer):
+            raise HTTPException(409, "Purchase exceeds the offer's available quantity")
         if payload.quantity_wh > current_demand(db, buyer):
             raise HTTPException(409, "Purchase exceeds this household's eligible demand")
         duplicate = db.scalar(select(Trade.id).where(
-            Trade.seller_id == seller.id, Trade.buyer_id == buyer.id,
+            Trade.offer_id == offer.id, Trade.buyer_id == buyer.id,
             Trade.quantity_wh == payload.quantity_wh, Trade.status == "completed"))
         if duplicate:
             raise HTTPException(409, "An identical active commitment already exists")
-        total = money_paise(payload.quantity_wh, seller.preferred_price_paise)
-        trade = Trade(seller_id=seller.id, buyer_id=buyer.id,
-                      quantity_wh=payload.quantity_wh,
-                      price_paise_per_kwh=seller.preferred_price_paise,
-                      total_paise=total, status="completed")
+        total = money_paise(payload.quantity_wh, offer.price_paise_per_kwh)
+        trade = Trade(offer_id=offer.id, idempotency_key=idempotency_key,
+            seller_id=seller.id, buyer_id=buyer.id, quantity_wh=payload.quantity_wh,
+            price_paise_per_kwh=offer.price_paise_per_kwh, total_paise=total, status="completed")
         db.add(trade)
         db.flush()
         audit(db, ctx["role"], "trade_purchased", "trade", trade.id, buyer.id,
-              {"seller_id": seller.id, "quantity_wh": payload.quantity_wh,
-               "total_paise": total})
+              {"seller_id": seller.id, "offer_id": offer.id,
+               "quantity_wh": payload.quantity_wh, "total_paise": total})
         db.commit()
         return serialize_trade(trade, seller, buyer)
     except Exception:
