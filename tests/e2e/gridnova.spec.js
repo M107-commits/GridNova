@@ -113,7 +113,7 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   await page.locator('#sidenav [data-page="my-energy"]').click();
   const reference = "E2E-" + Date.now();
   await page.locator('#generationForm [name="certificate_reference"]').fill(reference);
-  await page.locator("#generationForm button[type=submit]").click();
+  await page.locator("#generationForm button.primary").click();
   await expect(page.locator("#toast")).toContainText("submitted");
   await page.locator("#role").selectOption("verifier");
   await page.locator('#sidenav [data-page="verification"]').click();
