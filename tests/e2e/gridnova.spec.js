@@ -59,7 +59,6 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
     return { firstStatus: first.status, retryStatus: retry.status,
       firstId: firstBody.id, retryId: retryBody.id, fillStatus: fill.status };
   }, offer.id);
-  console.log("Browser purchase retry result:", apiResult);
   expect(apiResult.firstStatus).toBe(201);
   expect(apiResult.retryStatus).toBe(201);
   expect(apiResult.firstId).toBe(apiResult.retryId);
