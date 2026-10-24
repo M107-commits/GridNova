@@ -175,7 +175,7 @@ def test_offer_records_expire_and_can_be_withdrawn(client):
     listed = client.get("/api/offers?seller_household_id=5", headers=owner(5)).json()
     assert any(o["id"] == offer_id and o["quantity_wh"] == 500 for o in listed)
     withdrawn = client.post(f"/api/offers/{offer_id}/cancel", headers=owner(5))
-    assert withdrawn.status_code == 200 and withdrawn.json()["status"] == "cancelled"
+    assert withdrawn.status_code == 200 and withdrawn.json()["status"] == "withdrawn"
     remaining = client.get("/api/offers?seller_household_id=5", headers=owner(5)).json()
     assert next(o for o in remaining if o["id"] == offer_id)["status"] == "withdrawn"
 
