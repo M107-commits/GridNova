@@ -127,20 +127,22 @@ def require_reviewer(ctx: dict):
     if ctx["role"] not in {"verifier", "admin"}:
         raise HTTPException(403, "This action requires the demo verifier role")
 
-def seed():
-    Base.metadata.create_all(bind=engine)
-    household_columns = {column["name"] for column in inspect(engine).get_columns("households")}
+def seed(target_engine=engine):
+    """Create or migrate the schema and seed the supplied database."""
+    Base.metadata.create_all(bind=target_engine)
+    household_columns = {column["name"] for column in inspect(target_engine).get_columns("households")}
     if "offer_limit_wh" not in household_columns:
-        with engine.begin() as connection:
+        with target_engine.begin() as connection:
             connection.execute(text("ALTER TABLE households ADD COLUMN offer_limit_wh INTEGER NOT NULL DEFAULT 100000"))
-    trade_columns = {column["name"] for column in inspect(engine).get_columns("trades")}
+    trade_columns = {column["name"] for column in inspect(target_engine).get_columns("trades")}
     with engine.begin() as connection:
         if "offer_id" not in trade_columns:
             connection.execute(text("ALTER TABLE trades ADD COLUMN offer_id INTEGER REFERENCES offers(id)"))
         if "idempotency_key" not in trade_columns:
             connection.execute(text("ALTER TABLE trades ADD COLUMN idempotency_key VARCHAR(120)"))
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_trades_idempotency_key ON trades(idempotency_key)"))
-    with SessionLocal() as db:
+        target_session = sessionmaker(bind=target_engine, autoflush=False, expire_on_commit=False)
+    with target_session() as db:
         if db.scalar(select(func.count(Household.id))) == 0:
             for name, city, locality, generation, consumption, source in CITIES:
                 db.add(Household(name=name, city=city, locality=locality, source=source,
@@ -558,10 +560,9 @@ def reset_demo(ctx: dict = Depends(role_context), db: Session = Depends(get_db))
     except Exception:
         db.rollback()
         raise
-    seed()
-    with SessionLocal() as check:
-        audit(check, "admin", "demo_reset", "application", None, None, {"seed_households": len(CITIES)})
-        check.commit()
+    seed(db.get_bind())
+    audit(db, "admin", "demo_reset", "application", None, None, {"seed_households": len(CITIES)})
+    db.commit()
     return {"status": "reset", "households": len(CITIES), "simulation": True}
 
 @app.get("/api/trades.csv")
