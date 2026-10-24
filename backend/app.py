@@ -152,6 +152,8 @@ def update_energy(household_id: int, payload: HouseholdEnergyUpdate,
 def dashboard(household_id: int | None = Query(default=None), ctx: dict = Depends(role_context),
               db: Session = Depends(get_db)):
     selected_id = household_id or ctx["household_id"] or 1
+    if ctx["role"] == "homeowner" and ctx["household_id"] is not None and selected_id != ctx["household_id"]:
+        raise HTTPException(403, "Select your own household in the demo selector")
     selected = db.get(Household, selected_id)
     if not selected:
         raise HTTPException(404, "Household not found")
@@ -243,8 +245,13 @@ def purchase_offer(offer_id: int, payload: PurchaseRequest,
 
 @app.get("/api/trades")
 def trades(household_id: int | None = None, status: str | None = None,
-           search: str | None = None, db: Session = Depends(get_db)):
+           search: str | None = None, ctx: dict = Depends(role_context), db: Session = Depends(get_db)):
     stmt = select(Trade).order_by(Trade.created_at.desc())
+    if ctx["role"] == "homeowner":
+        selected_id = ctx["household_id"] or 1
+        if household_id is not None and household_id != selected_id:
+            raise HTTPException(403, "You can only view trades for the selected household")
+        household_id = selected_id
     if household_id is not None:
         stmt = stmt.where((Trade.seller_id == household_id) | (Trade.buyer_id == household_id))
     if status:
@@ -350,8 +357,13 @@ def reject_record(record_id: int, payload: ReviewRequest = ReviewRequest(),
 
 @app.get("/api/audit-events")
 def audit_events(household_id: int | None = None, limit: int = Query(default=100, ge=1, le=500),
-                 db: Session = Depends(get_db)):
+                 ctx: dict = Depends(role_context), db: Session = Depends(get_db)):
     stmt = select(AuditEvent).order_by(AuditEvent.created_at.desc()).limit(limit)
+    if ctx["role"] == "homeowner":
+        selected_id = ctx["household_id"] or 1
+        if household_id is not None and household_id != selected_id:
+            raise HTTPException(403, "You can only view audit events for the selected household")
+        household_id = selected_id
     if household_id is not None:
         stmt = stmt.where(AuditEvent.household_id == household_id)
     return [{"id": e.id, "household_id": e.household_id, "actor_role": e.actor_role,
@@ -433,7 +445,6 @@ def reset_demo(ctx: dict = Depends(role_context), db: Session = Depends(get_db))
         db.query(Trade).delete()
         db.query(GenerationRecord).delete()
         db.query(HouseholdSetting).delete()
-        db.query(AuditEvent).delete()
         db.query(Household).delete()
         db.commit()
     except Exception:
@@ -446,8 +457,14 @@ def reset_demo(ctx: dict = Depends(role_context), db: Session = Depends(get_db))
     return {"status": "reset", "households": len(CITIES), "simulation": True}
 
 @app.get("/api/trades.csv")
-def export_trades(household_id: int | None = None, db: Session = Depends(get_db)):
+def export_trades(household_id: int | None = None, ctx: dict = Depends(role_context),
+                 db: Session = Depends(get_db)):
     import csv, io
+    if ctx["role"] == "homeowner":
+        selected_id = ctx["household_id"] or 1
+        if household_id is not None and household_id != selected_id:
+            raise HTTPException(403, "You can only export trades for the selected household")
+        household_id = selected_id
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["trade_id", "seller", "buyer", "quantity_wh", "price_paise_per_kwh",
