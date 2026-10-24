@@ -1,11 +1,11 @@
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor\nfrom datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 
 from backend.app import app
 from backend.database import Base, get_db
-from backend.models import Household
+from backend.models import Household, Offer
 
 def household(name, generation, consumption, price=1200, share=True):
     return Household(name=name, city="Bengaluru", locality="Demo Block", source="solar",
@@ -142,3 +142,21 @@ def test_household_scoped_reads(client):
     assert denied.status_code == 403
     cross_trades = client.get("/api/trades?household_id=2", headers=owner(1))
     assert cross_trades.status_code == 403
+
+def test_offer_records_expire_and_can_be_withdrawn(client):
+    made = client.post("/api/offers", headers=owner(5),
+        json={"household_id": 5, "quantity_wh": 500, "price_paise_per_kwh": 900,
+              "expires_in_hours": 12})
+    assert made.status_code == 201
+    offer_id = made.json()["id"]
+    listed = client.get("/api/offers?seller_household_id=5", headers=owner(5)).json()
+    assert any(o["id"] == offer_id and o["quantity_wh"] == 500 for o in listed)
+    withdrawn = client.post(f"/api/offers/{offer_id}/cancel", headers=owner(5))
+    assert withdrawn.status_code == 200 and withdrawn.json()["status"] == "cancelled"
+    remaining = client.get("/api/offers?seller_household_id=5", headers=owner(5)).json()
+    assert all(o["id"] != offer_id for o in remaining)
+
+def test_purchase_requires_idempotency_key(client):
+    result = client.post("/api/offers/1/purchase", headers=owner(2),
+        json={"buyer_household_id": 2, "quantity_wh": 100})
+    assert result.status_code == 422
