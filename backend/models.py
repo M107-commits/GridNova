@@ -82,3 +82,20 @@ class HouseholdSetting(Base):
     preferred_price_paise = Column(Integer, nullable=False, default=1200)
     share_surplus = Column(Boolean, nullable=False, default=True)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class UserAccount(Base):
+    __tablename__ = "user_accounts"
+    id = Column(Integer, primary_key=True)
+    household_id = Column(Integer, ForeignKey("households.id", ondelete="CASCADE"), nullable=False, unique=True)
+    email = Column(String(254), nullable=False, unique=True, index=True)
+    password_hash = Column(String(256), nullable=False)
+    role = Column(String(20), nullable=False, default="homeowner")
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+    token_hash = Column(String(64), primary_key=True)
+    account_id = Column(Integer, ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
