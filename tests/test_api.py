@@ -1,12 +1,13 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone\nfrom datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 
 from backend.app import app
 from backend.database import Base, get_db
-from backend.models import Household, Offer, Offer
+from backend.models import Household, Offer
 
 def household(name, generation, consumption, price=1200, share=True):
     return Household(name=name, city="Bengaluru", locality="Demo Block", source="solar",
