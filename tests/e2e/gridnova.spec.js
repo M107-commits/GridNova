@@ -53,16 +53,23 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
     const retry = await request(), retryBody = await retry.json();
     const fill = await fetch("/api/offers/" + offerId + "/purchase", {
       method: "POST",
-      headers: { ...headers, "X-Household-Id": "3", "Idempotency-Key": "browser-full-fill-key-001" },
-      body: JSON.stringify({ buyer_household_id: 3, quantity_wh: 200 })
+      headers: { ...headers, "Idempotency-Key": "browser-full-fill-key-001" },
+      body: JSON.stringify({ buyer_household_id: 2, quantity_wh: 199 })
+    });
+    const final = await fetch("/api/offers/" + offerId + "/purchase", {
+      method: "POST",
+      headers: { ...headers, "Idempotency-Key": "browser-full-fill-key-002" },
+      body: JSON.stringify({ buyer_household_id: 2, quantity_wh: 1 })
     });
     return { firstStatus: first.status, retryStatus: retry.status,
-      firstId: firstBody.id, retryId: retryBody.id, fillStatus: fill.status };
+      firstId: firstBody.id, retryId: retryBody.id, fillStatus: fill.status,
+      finalStatus: final.status };
   }, offer.id);
   expect(apiResult.firstStatus).toBe(201);
   expect(apiResult.retryStatus).toBe(201);
   expect(apiResult.firstId).toBe(apiResult.retryId);
   expect(apiResult.fillStatus).toBe(201);
+  expect(apiResult.finalStatus).toBe(201);
   const left = await page.request.get("/api/offers?seller_household_id=5", {
     headers: { "X-Demo-Role": "homeowner", "X-Household-Id": "5" }
   });
