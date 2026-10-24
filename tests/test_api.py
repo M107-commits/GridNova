@@ -247,7 +247,7 @@ def test_reset_reseeds_the_request_database_and_removes_offers(client):
     reset = client.post("/api/reset", headers={"X-Demo-Role": "admin"})
     assert reset.status_code == 200
     assert len(client.get("/api/households").json()) == 5
-    assert len(client.get("/api/offers").json()) == 5
+    assert len(client.get("/api/offers").json()) == 4
     assert client.post("/api/reset", headers=owner(1)).status_code == 403
     assert any(e["action"] == "demo_reset" for e in
         client.get("/api/audit-events", headers={"X-Demo-Role": "admin"}).json())
@@ -272,3 +272,21 @@ def test_non_loopback_cannot_forge_admin_header(client):
     remote = TestClient(app, client=("203.0.113.8", 54321), raise_server_exceptions=False)
     denied = remote.post("/api/reset", headers={"X-Demo-Role": "admin"})
     assert denied.status_code == 403
+
+
+def test_partial_then_full_offer_fill_removes_offer(client):
+    first = client.post("/api/offers/1/purchase",
+        headers=purchase_headers(2, "fill-partial-key-001"),
+        json={"buyer_household_id": 2, "quantity_wh": 1000})
+    assert first.status_code == 201
+    second = client.post("/api/offers/1/purchase",
+        headers=purchase_headers(2, "fill-partial-key-002"),
+        json={"buyer_household_id": 2, "quantity_wh": 2000})
+    assert second.status_code == 201
+    remainder = next(o for o in client.get("/api/offers").json() if o["id"] == 1)
+    assert remainder["quantity_wh"] == 1000
+    final = client.post("/api/offers/1/purchase",
+        headers=purchase_headers(3, "fill-final-key-0001"),
+        json={"buyer_household_id": 3, "quantity_wh": 1000})
+    assert final.status_code == 201
+    assert all(o["id"] != 1 for o in client.get("/api/offers").json())
