@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import app
 from backend.database import Base, get_db
-from backend.models import Household, Offer
+from backend.models import Household, Offer, Trade, GenerationRecord, AuditEvent
 
 def household(name, generation, consumption, price=1200, share=True):
     return Household(name=name, city="Bengaluru", locality="Demo Block", source="solar",
@@ -40,7 +40,8 @@ def client(tmp_path):
         finally:
             session.close()
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as c:
+    with TestClient(app, raise_server_exceptions=False) as c:
+        c.test_session = Session
         yield c
     app.dependency_overrides.clear()
     Base.metadata.drop_all(engine)
@@ -174,3 +175,100 @@ def test_purchase_requires_idempotency_key(client):
     result = client.post("/api/offers/1/purchase", headers=owner(2),
         json={"buyer_household_id": 2, "quantity_wh": 100})
     assert result.status_code == 422
+
+
+def test_same_idempotency_key_concurrent_retry_creates_one_trade(client):
+    payload = {"buyer_household_id": 2, "quantity_wh": 1000}
+    headers = purchase_headers(2, "concurrent-retry-key-01")
+    def buy(_):
+        return client.post("/api/offers/1/purchase", headers=headers, json=payload)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(buy, range(2)))
+    assert [r.status_code for r in results] == [201, 201]
+    assert results[0].json()["id"] == results[1].json()["id"]
+    assert len(client.get("/api/trades", headers=owner(2)).json()) == 1
+    with client.test_session() as db:
+        assert db.query(Trade).filter_by(idempotency_key="concurrent-retry-key-01").count() == 1
+        assert db.query(AuditEvent).filter_by(action="trade_purchased").count() == 1
+
+def test_expired_offer_cannot_be_listed_or_purchased(client):
+    made = client.post("/api/offers", headers=owner(5), json={
+        "household_id": 5, "quantity_wh": 500, "price_paise_per_kwh": 900, "expires_in_hours": 12})
+    assert made.status_code == 201
+    offer_id = made.json()["id"]
+    with client.test_session() as db:
+        offer = db.get(Offer, offer_id)
+        offer.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.commit()
+    assert all(row["id"] != offer_id for row in client.get("/api/offers").json())
+    result = client.post(f"/api/offers/{offer_id}/purchase",
+        headers=purchase_headers(2, "expired-offer-key-01"),
+        json={"buyer_household_id": 2, "quantity_wh": 100})
+    assert result.status_code == 404
+
+def test_partial_fills_and_withdrawal_do_not_release_twice(client):
+    first = client.post("/api/offers/1/purchase",
+        headers=purchase_headers(2, "partial-fill-key-001"),
+        json={"buyer_household_id": 2, "quantity_wh": 1000})
+    assert first.status_code == 201
+    partial = next(o for o in client.get("/api/offers").json() if o["id"] == 1)
+    assert partial["quantity_wh"] == 3000
+    second = client.post("/api/offers/1/purchase",
+        headers=purchase_headers(2, "partial-fill-key-002"),
+        json={"buyer_household_id": 2, "quantity_wh": 2000})
+    assert second.status_code == 201
+    remainder = next(o for o in client.get("/api/offers").json() if o["id"] == 1)
+    assert remainder["quantity_wh"] == 1000
+    withdrawn = client.post("/api/offers/1/cancel", headers=owner(1))
+    assert withdrawn.status_code == 200
+    assert all(o["id"] != 1 for o in client.get("/api/offers").json())
+    with client.test_session() as db:
+        assert db.query(Trade).filter_by(status="completed").count() == 2
+        assert db.query(Trade).filter_by(status="cancelled").count() == 0
+
+def test_cancel_is_single_transition_and_verifier_cannot_mutate_household(client):
+    response = client.post("/api/offers/1/purchase",
+        headers=purchase_headers(2, "cancel-once-key-001"),
+        json={"buyer_household_id": 2, "quantity_wh": 1000})
+    trade_id = response.json()["id"]
+    reviewer = {"X-Demo-Role": "verifier", "X-Household-Id": "2"}
+    assert client.post(f"/api/trades/{trade_id}/cancel", headers=reviewer).status_code == 403
+    assert client.patch("/api/households/2/energy", headers=reviewer,
+        json={"generation_wh": 2000, "consumption_wh": 3000}).status_code == 403
+    assert client.post(f"/api/trades/{trade_id}/cancel", headers=owner(2)).status_code == 200
+    assert client.post(f"/api/trades/{trade_id}/cancel", headers=owner(2)).status_code == 409
+    seller = next(h for h in client.get("/api/households").json() if h["id"] == 1)
+    assert seller["surplus_wh"] == 4000
+
+def test_reset_reseeds_the_request_database_and_removes_offers(client):
+    create = client.post("/api/offers", headers=owner(5),
+        json={"household_id": 5, "quantity_wh": 500, "price_paise_per_kwh": 900})
+    assert create.status_code == 201
+    reset = client.post("/api/reset", headers={"X-Demo-Role": "admin"})
+    assert reset.status_code == 200
+    assert len(client.get("/api/households").json()) == 5
+    assert len(client.get("/api/offers").json()) == 5
+    assert client.post("/api/reset", headers=owner(1)).status_code == 403
+    assert any(e["action"] == "demo_reset" for e in
+        client.get("/api/audit-events", headers={"X-Demo-Role": "admin"}).json())
+
+def test_purchase_commit_failure_rolls_back_trade_and_audit(client, monkeypatch):
+    from sqlalchemy.orm import Session as SASession
+    def fail_commit(self):
+        raise RuntimeError("synthetic database commit failure")
+    with monkeypatch.context() as patch:
+        patch.setattr(SASession, "commit", fail_commit)
+        failed = client.post("/api/offers/1/purchase",
+            headers=purchase_headers(2, "commit-failure-key-01"),
+            json={"buyer_household_id": 2, "quantity_wh": 1000})
+    assert failed.status_code == 500
+    assert client.get("/api/trades", headers=owner(2)).json() == []
+    events = client.get("/api/audit-events", headers=owner(2)).json()
+    assert all(e["action"] != "trade_purchased" for e in events)
+    seller = next(h for h in client.get("/api/households").json() if h["id"] == 1)
+    assert seller["surplus_wh"] == 4000
+
+def test_non_loopback_cannot_forge_admin_header(client):
+    remote = TestClient(app, client=("203.0.113.8", 54321), raise_server_exceptions=False)
+    denied = remote.post("/api/reset", headers={"X-Demo-Role": "admin"})
+    assert denied.status_code == 403
