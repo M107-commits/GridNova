@@ -34,25 +34,26 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-The browser suite uses real Chromium at desktop and Pixel 7 sized viewports. It checks all seven page routes, household/profile editing, offer creation, partial and complete purchase fills, same-key retries, offer withdrawal, transaction details and cancellation, generation submission and verifier review, settings, the simulator, and demo reset. Expiry is exercised against an expired database record in the API tests because the UI does not expose a clock-advance control.
+The browser suite uses real Chromium at desktop and Pixel 7 sized viewports. It checks all seven page routes, household/profile editing, offer creation, partial and complete purchase fills, same-key retries, offer withdrawal, transaction details and cancellation, generation submission and verifier review, settings, the simulator, guided-tour navigation, keyboard focus, offer status display, and demo reset. Expiry is exercised against an expired database record in the API tests because the UI does not expose a clock-advance control.
 
 ## Verification results
 
 Latest verification ran against the connected repository revision in an isolated scratch checkout:
 
-- `python -m pytest -q`: **21 passed**. One upstream Starlette deprecation warning notes that its TestClient currently uses httpx; it did not affect the test results.
+- `python -m pytest -q`: **23 passed**. One upstream Starlette deprecation warning notes that its TestClient currently uses httpx; it did not affect the test results.
 - `npm run test:e2e`: **2 passed, 2 skipped**. The two projects each run their matching scenario (one desktop workflow and one mobile navigation workflow); the other scenario is explicitly skipped in each project.
 - Browser checks ran in Chromium on desktop (1440×1000) and mobile (Pixel 7 profile, then explicitly 390×844). This was a real browser run, not a DOM-only check.
 
 ## Application pages
 
 - **Overview:** API-backed household and community generation, consumption, surplus, demand, ledger activity, and illustrative impact.
-- **Energy Marketplace:** searchable and sortable independent offers, expiry, withdrawal, purchase dialogs, and idempotency keys.
-- **My Energy:** edit synthetic generation and consumption, set rates, and submit generation records.
+- **Energy Marketplace:** searchable and sortable offers, visible open/partial/expired/withdrawn/filled states, purchase dialogs, and idempotency keys.
+- **My Energy:** edit generation and consumption, set rates, and submit generation records. Changes that would invalidate active listings or completed trades are rejected.
 - **Transactions:** search and filter the persistent ledger, inspect trade details, cancel eligible trades, and export CSV.
 - **Verification & Impact:** demo review of generation records, community analytics, and clearly labeled environmental estimates.
 - **Microgrid Simulator:** adjust solar and demand assumptions and run the server-side synthetic model.
-- **Settings:** household sharing/rate preferences and demo reset.
+- **Settings:** household sharing/rate preferences and admin-only demo reset. A short guided tour walks through listing, buying, reviewing, and activity.
+- **Accessibility:** keyboard-visible focus, labelled controls and charts, and named dialogs.
 
 ## Security model and audit notes
 
