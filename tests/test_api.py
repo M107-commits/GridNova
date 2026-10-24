@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 
-from backend.app import app, _hash_password
+from backend.app import app
 from backend.database import Base, get_db
 from backend.models import Household, Offer, Trade, GenerationRecord, AuditEvent, UserAccount, AuthSession
 
@@ -39,15 +39,15 @@ def client(tmp_path):
         accounts = []
         for hid in range(1, 6):
             account = UserAccount(household_id=hid, email=f"home{hid}@example.test",
-                display_name=f"Home {hid}", password_hash=_hash_password("GridNova-test-password"),
+                display_name=f"Home {hid}", password_hash="unused-test-hash",
                 role="homeowner")
             db.add(account)
             accounts.append(("homeowner", hid, account))
         accounts.extend([
             ("verifier", 2, UserAccount(household_id=2, email="reviewer@example.test",
-                display_name="Reviewer", password_hash=_hash_password("GridNova-test-password"), role="verifier")),
+                display_name="Reviewer", password_hash="unused-test-hash", role="verifier")),
             ("admin", 1, UserAccount(household_id=1, email="admin@example.test",
-                display_name="Admin", password_hash=_hash_password("GridNova-test-password"), role="admin")),
+                display_name="Admin", password_hash="unused-test-hash", role="admin")),
         ])
         for role_name, hid, account in accounts[5:]:
             db.add(account)
