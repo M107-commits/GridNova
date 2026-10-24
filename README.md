@@ -40,7 +40,7 @@ The browser suite uses real Chromium at desktop and Pixel 7 sized viewports. It 
 
 Last run in the connected repository workspace:
 
-- `python -m pytest -q`: **20 passed**. One upstream Starlette deprecation warning notes that its TestClient currently uses httpx; it did not affect the test results.
+- `python -m pytest -q`: **21 passed**. One upstream Starlette deprecation warning notes that its TestClient currently uses httpx; it did not affect the test results.
 - `npm run test:e2e`: **2 passed, 2 skipped**. The two projects each run their matching scenario (one desktop workflow and one mobile navigation workflow); the other scenario is explicitly skipped in each project.
 - Browser checks ran in Chromium on desktop (1440×1000) and mobile (Pixel 7 profile, then explicitly 390×844). This was a real browser run, not a DOM-only check.
 
@@ -63,7 +63,7 @@ The API rejects non-loopback clients by default. `GRIDNOVA_ALLOW_REMOTE_DEMO=1` 
 - Homeowners are scoped to the selected household for household-specific reads and writes. Marketplace and synthetic aggregate reads are shared.
 - Verifiers can review pending generation records but are blocked from household and trade mutation routes and simulator runs. Admin is a demo role with reset and cross-household demo actions.
 - Reset clears prior demo ledger, listing, generation, setting, and audit rows, reseeds the demo database, and records a new reset event.
-- Purchase, cancellation, offer withdrawal, review, and reset state changes use SQLite write transactions; purchase quantity accounting and idempotency are protected by the database and transaction boundary.
+- Purchases, cancellations, offer withdrawals, and generation reviews serialize their SQLite write transactions; purchases use `BEGIN IMMEDIATE`, integer Wh/paise accounting, a unique idempotency key, and rollback on failure.
 
 ## Simulation limits
 
