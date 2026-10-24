@@ -273,6 +273,11 @@ async def local_demo_boundary(request, call_next):
         return JSONResponse(status_code=403, content={
             "detail": "GridNova demo API is restricted to loopback clients. Remote demo mode is explicitly insecure."
         })
+    if request.url.path.startswith("/api/") and request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path not in {"/api/auth/register", "/api/auth/login"}:
+        csrf_cookie = request.cookies.get(CSRF_COOKIE, "")
+        csrf_header = request.headers.get("x-csrf-token", "")
+        if not csrf_cookie or not hmac.compare_digest(csrf_cookie, csrf_header):
+            return JSONResponse(status_code=403, content={"detail": "Request security token is missing or invalid. Refresh and try again."})
     return await call_next(request)
 
 @app.get("/api/health")
