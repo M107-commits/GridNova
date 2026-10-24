@@ -77,7 +77,7 @@ function go(page){currentPage=page;$$(".view").forEach(v=>v.classList.toggle("ac
 $$("[data-page]").forEach(b=>b.onclick=()=>go(b.dataset.page));
 function selected(){return Number(currentAccount?.household_id||0)}
 function showAuth(signup=false){$("#app").hidden=true;$("#authScreen").hidden=false;$("#loginPanel").hidden=signup;$("#signupPanel").hidden=!signup}
-async function init(){try{currentAccount=await api("/auth/me");homes=await api("/households");if(!homes.length)throw new Error("Household profile unavailable.");$("#accountName").textContent=currentAccount.household_name;await loadPage(currentPage);$("#app").hidden=false;$("#authScreen").hidden=true}catch(e){if(e.status===401){showAuth(false)}else{toast(e.message,true);showAuth(false)}}}
+async function init(){try{currentAccount=await api("/auth/me");homes=await api("/households");if(!homes.length)throw new Error("Household profile unavailable.");$("#accountName").textContent=currentAccount.household_name;await loadPage(currentPage);if(!currentAccount)throw Object.assign(new Error("Session expired"),{status:401});$("#app").hidden=false;$("#authScreen").hidden=true}catch(e){if(e.status===401){showAuth(false)}else{toast(e.message,true);showAuth(false)}}}
 function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 
 $("#loginForm").onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.target);try{await api("/auth/login",{method:"POST",body:JSON.stringify({email:fd.get("email"),password:fd.get("password")})});e.target.reset();await init()}catch(err){toast(err.message,true)}};
