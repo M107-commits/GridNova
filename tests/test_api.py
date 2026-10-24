@@ -283,7 +283,7 @@ def test_cancel_is_single_transition_and_verifier_cannot_mutate_household(client
     seller = next(h for h in client.get("/api/households").json() if h["id"] == 1)
     assert seller["surplus_wh"] == 4000
 
-def test_reset_reseeds_the_request_database_and_removes_offers(client):
+def test_global_reset_is_disabled_after_household_accounts_exist(client):
     create = client.post("/api/offers", headers=owner(5),
         json={"household_id": 5, "quantity_wh": 500, "price_paise_per_kwh": 900})
     assert create.status_code == 201
@@ -431,6 +431,8 @@ def test_real_account_registration_login_logout_and_forged_role_headers(client):
     assert me.status_code == 200 and me.json()["email"] == "asha@example.test"
     own_homes = client.get("/api/households").json()
     assert len(own_homes) == 1 and own_homes[0]["name"] == "Rao Home"
+    csrf_missing = client.post("/api/offers", json={"household_id": own_homes[0]["id"], "quantity_wh": 10, "price_paise_per_kwh": 100})
+    assert csrf_missing.status_code == 403
     forged = client.post("/api/reset", headers={"X-Demo-Role": "admin",
         "X-CSRF-Token": client.cookies.get("gridnova_csrf")})
     assert forged.status_code == 403
