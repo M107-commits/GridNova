@@ -94,12 +94,19 @@ def current_demand(db: Session, household: Household) -> int:
         Trade.buyer_id == household.id, Trade.status == "completed")) or 0
     return max(0, household.consumption_wh - household.generation_wh - int(bought))
 
+def unlisted_surplus(db: Session, household: Household) -> int:
+    physical = current_available(db, household)
+    reserved = sum(offer_available(db, offer) for offer in db.scalars(select(Offer).where(
+        Offer.household_id == household.id, Offer.status == "open")))
+    return max(0, physical - reserved)
+
 def serialize_household(db: Session, h: Household):
     return {
         "id": h.id, "name": h.name, "city": h.city, "locality": h.locality,
         "source": h.source, "capacity_wh": h.capacity_wh,
         "generation_wh": h.generation_wh, "consumption_wh": h.consumption_wh,
-        "surplus_wh": current_available(db, h), "eligible_demand_wh": current_demand(db, h),
+        "surplus_wh": current_available(db, h), "unlisted_surplus_wh": unlisted_surplus(db, h),
+        "eligible_demand_wh": current_demand(db, h),
         "preferred_price_paise": h.preferred_price_paise,
         "share_surplus": h.share_surplus,
     }
