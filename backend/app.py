@@ -289,9 +289,14 @@ def cancel_trade(trade_id: int, ctx: dict = Depends(role_context), db: Session =
 
 @app.get("/api/generation-records")
 def generation_records(household_id: int | None = None, status: str | None = None,
-                       db: Session = Depends(get_db)):
+                       ctx: dict = Depends(role_context), db: Session = Depends(get_db)):
     stmt = select(GenerationRecord).order_by(GenerationRecord.recorded_at.desc())
-    if household_id:
+    if ctx["role"] == "homeowner":
+        selected_id = ctx["household_id"] or 1
+        if household_id is not None and household_id != selected_id:
+            raise HTTPException(403, "You can only view records for the selected household")
+        household_id = selected_id
+    if household_id is not None:
         stmt = stmt.where(GenerationRecord.household_id == household_id)
     if status:
         stmt = stmt.where(GenerationRecord.status == status)
