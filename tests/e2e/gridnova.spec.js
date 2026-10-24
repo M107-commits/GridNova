@@ -52,7 +52,7 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
     const fill = await fetch("/api/offers/" + offerId + "/purchase", {
       method: "POST",
       headers: { ...headers, "Idempotency-Key": "browser-full-fill-key-001" },
-      body: JSON.stringify({ buyer_household_id: 2, quantity_wh: 200 })
+      body: JSON.stringify({ buyer_household_id: 3, quantity_wh: 200 })
     });
     return { firstStatus: first.status, retryStatus: retry.status,
       firstId: firstBody.id, retryId: retryBody.id, fillStatus: fill.status };
