@@ -150,9 +150,6 @@ def dashboard(household_id: int | None = Query(default=None), ctx: dict = Depend
         raise HTTPException(404, "Household not found")
     all_homes = list(db.scalars(select(Household)))
     available = sum(current_available(db, h) for h in all_homes)
-    trade_rows = list(db.execute(select(Trade, Household, Household).join(
-        Household, Trade.seller_id == Household.id).join(
-        Household, Trade.buyer_id == Household.id)))
     # Keep dashboard activity derived from the persistent trade ledger.
     recent = []
     for t in db.scalars(select(Trade).order_by(Trade.created_at.desc()).limit(5)):
