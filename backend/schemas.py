@@ -1,4 +1,5 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
+import re
 from typing import Literal
 
 class HouseholdEnergyUpdate(BaseModel):
@@ -46,3 +47,40 @@ class HouseholdResponse(BaseModel):
     consumption_wh: int
     preferred_price_paise: int
     share_surplus: bool
+
+
+class SignupRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    household_name: str = Field(min_length=1, max_length=100)
+    email: str = Field(min_length=6, max_length=254)
+    password: str = Field(min_length=10, max_length=128)
+    city: str = Field(min_length=2, max_length=50)
+    locality: str = Field(min_length=2, max_length=80)
+
+    @field_validator("name", "household_name", "city", "locality")
+    @classmethod
+    def trim_required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("This field cannot be blank")
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not re.fullmatch(r"[^\\s@]+@[^\\s@]+\\.[^\\s@]+", value):
+            raise ValueError("Enter a valid email address")
+        return value
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=6, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not re.fullmatch(r"[^\\s@]+@[^\\s@]+\\.[^\\s@]+", value):
+            raise ValueError("Enter a valid email address")
+        return value
