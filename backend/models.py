@@ -20,13 +20,28 @@ class Household(Base):
     preferred_price_paise = Column(Integer, nullable=False, default=1200)
     share_surplus = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
-    records = relationship("GenerationRecord", back_populates="household", cascade="all, delete-orphan")\n    offers = relationship("Offer", back_populates="household", cascade="all, delete-orphan")
+    records = relationship("GenerationRecord", back_populates="household", cascade="all, delete-orphan")
+    offers = relationship("Offer", back_populates="household", cascade="all, delete-orphan")
 
-class Offer(Base):\n    __tablename__ = "offers"\n    __table_args__ = (CheckConstraint("quantity_wh > 0"), CheckConstraint("price_paise_per_kwh >= 0"))\n    id = Column(Integer, primary_key=True)\n    household_id = Column(Integer, ForeignKey("households.id"), nullable=False)\n    quantity_wh = Column(Integer, nullable=False)\n    price_paise_per_kwh = Column(Integer, nullable=False)\n    status = Column(String(20), nullable=False, default="open")\n    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)\n    expires_at = Column(DateTime(timezone=True), nullable=False)\n    household = relationship("Household", back_populates="offers")\n\nclass Trade(Base):
+class Offer(Base):
+    __tablename__ = "offers"
+    __table_args__ = (CheckConstraint("quantity_wh > 0"), CheckConstraint("price_paise_per_kwh >= 0"))
+    id = Column(Integer, primary_key=True)
+    household_id = Column(Integer, ForeignKey("households.id"), nullable=False)
+    quantity_wh = Column(Integer, nullable=False)
+    price_paise_per_kwh = Column(Integer, nullable=False)
+    status = Column(String(20), nullable=False, default="open")
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    household = relationship("Household", back_populates="offers")
+
+class Trade(Base):
     __tablename__ = "trades"
     __table_args__ = (CheckConstraint("quantity_wh > 0"), CheckConstraint("price_paise_per_kwh >= 0"))
     id = Column(Integer, primary_key=True)
-    offer_id = Column(Integer, ForeignKey("offers.id"), nullable=True)\n    idempotency_key = Column(String(120), nullable=True, unique=True)\n    seller_id = Column(Integer, ForeignKey("households.id"), nullable=False)
+    offer_id = Column(Integer, ForeignKey("offers.id"), nullable=True)
+    idempotency_key = Column(String(120), nullable=True, unique=True)
+    seller_id = Column(Integer, ForeignKey("households.id"), nullable=False)
     buyer_id = Column(Integer, ForeignKey("households.id"), nullable=False)
     quantity_wh = Column(Integer, nullable=False)
     price_paise_per_kwh = Column(Integer, nullable=False)
