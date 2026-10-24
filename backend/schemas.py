@@ -28,7 +28,7 @@ class ReviewRequest(BaseModel):
 class SimulationRequest(BaseModel):
     solar_percent: int = Field(ge=0, le=100)
     demand_percent: int = Field(ge=0, le=100)
-    household_ids: list[int] | None = None
+    household_ids: list[int] | None = Field(default=None, max_length=5)
 
 class SettingsUpdate(BaseModel):
     preferred_price_paise: int = Field(ge=0, le=100_000)
