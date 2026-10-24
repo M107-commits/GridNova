@@ -13,7 +13,7 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   expect(await page.evaluate(() => getComputedStyle(document.activeElement).outlineWidth)).toBe("3px");
   await expect(page.getByRole("img", { name: "Illustrative neighborhood generation and energy use" })).toBeVisible();
   await page.locator("#quickTour").click();
-  await expect(page.locator("#dialog")).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "How GridNova works" })).toBeVisible();
   await expect(page.locator("#dialog .tour-steps li")).toHaveCount(5);
   await expect(page.locator("#dialog")).toContainText("request headers");
   await page.locator('#dialog [data-guide-page="market"]').first().click();
@@ -54,6 +54,7 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   await page.locator("#household").selectOption("2");
   await page.locator('#sidenav [data-page="market"]').click();
   await page.locator('[data-purchase="' + offer.id + '"]').click();
+  await expect(page.getByRole("dialog", { name: "Buy energy" })).toBeVisible();
   const purchaseDialog = page.locator("#purchaseForm");
   await purchaseDialog.locator('[name="quantity_wh"]').fill("200");
   await purchaseDialog.locator('button[type="submit"], button.primary').click();
@@ -126,6 +127,7 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   const targetRow = page.locator("#trades tr").filter({ hasText: "#" + targetTrade.id });
   await expect(targetRow).toBeVisible();
   await targetRow.locator('[data-detail]').click();
+  await expect(page.getByRole("dialog", { name: "Trade #" + targetTrade.id })).toBeVisible();
   await expect(page.locator("#tradeDetail")).toContainText("Trade #" + targetTrade.id);
   await expect(page.locator("#tradeDetail")).toContainText("Offer #" + offer.id + " · Filled");
   page.once("dialog", (dialog) => dialog.accept());
