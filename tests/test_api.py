@@ -416,3 +416,32 @@ def test_offer_lifecycle_statuses_are_visible_in_seller_and_trade_views(client):
         db.commit()
     own = client.get("/api/offers?seller_household_id=5", headers=owner(5)).json()
     assert next(item for item in own if item["id"] == expired.json()["id"])["status"] == "expired"
+
+
+def test_real_account_registration_login_logout_and_forged_role_headers(client):
+    client.cookies.clear()
+    payload = {"name": "Asha Rao", "household_name": "Rao Home",
+        "email": "asha@example.test", "password": "GridNova-password-10",
+        "city": "Bengaluru", "locality": "Indiranagar"}
+    registered = client.post("/api/auth/register", json=payload)
+    assert registered.status_code == 201
+    assert registered.json()["household_name"] == "Rao Home"
+    assert "httponly" in registered.headers.get("set-cookie", "").lower()
+    me = client.get("/api/auth/me")
+    assert me.status_code == 200 and me.json()["email"] == "asha@example.test"
+    own_homes = client.get("/api/households").json()
+    assert len(own_homes) == 1 and own_homes[0]["name"] == "Rao Home"
+    forged = client.post("/api/reset", headers={"X-Demo-Role": "admin",
+        "X-CSRF-Token": client.cookies.get("gridnova_csrf")})
+    assert forged.status_code == 403
+    client.post("/api/auth/logout",
+        headers={"X-CSRF-Token": client.cookies.get("gridnova_csrf")})
+    assert client.get("/api/auth/me").status_code == 401
+
+    login = client.post("/api/auth/login", json={
+        "email": "ASHA@example.test", "password": "GridNova-password-10"})
+    assert login.status_code == 200
+    assert client.get("/api/auth/me").json()["household_id"] == registered.json()["household_id"]
+    bad_login = client.post("/api/auth/login", json={
+        "email": "asha@example.test", "password": "wrong-password"})
+    assert bad_login.status_code == 401
