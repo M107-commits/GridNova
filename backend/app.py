@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from .database import Base, SessionLocal, engine, get_db
-from .models import AccountSession, AuditEvent, GenerationRecord, Household, HouseholdSetting, Offer, Trade, UserAccount
+from .models import AuthSession, AuditEvent, GenerationRecord, Household, HouseholdSetting, Offer, Trade, UserAccount
 from .schemas import (GenerationCreate, HouseholdEnergyUpdate, OfferCreate,
                       PurchaseRequest, ReviewRequest, SettingsUpdate,
                       SimulationRequest, SignupRequest, LoginRequest)
@@ -171,7 +171,7 @@ def _set_session(response: Response, raw_token: str, csrf: str):
 
 def _new_session(db: Session, account: UserAccount):
     token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
-    db.add(AccountSession(token_hash=_token_digest(token), account_id=account.id,
+    db.add(AuthSession(token_hash=_token_digest(token), account_id=account.id,
                           expires_at=datetime.now(timezone.utc) + SESSION_TTL))
     return token, csrf
 
@@ -179,7 +179,7 @@ def role_context(gridnova_session: str | None = Cookie(default=None, alias=SESSI
                  db: Session = Depends(get_db)):
     if not gridnova_session:
         raise HTTPException(401, "Sign in to continue")
-    session = db.get(AccountSession, _token_digest(gridnova_session))
+    session = db.get(AuthSession, _token_digest(gridnova_session))
     if not session:
         raise HTTPException(401, "Session expired. Sign in again.")
     expiry = session.expires_at
