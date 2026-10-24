@@ -82,7 +82,7 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   await page.locator('#listingForm [name="quantity_wh"]').fill("300");
   await page.locator('#listingForm [name="price_paise_per_kwh"]').fill("950");
   await page.locator('#listingForm button.primary').click();
-  await expect(page.locator("#toast")).toContainText("Surplus listed");
+  await expect(page.locator("#toast")).toContainText("Offer is live");
   const ownResponse = await page.request.get("/api/offers?seller_household_id=5", {
     headers: { "X-Demo-Role": "homeowner", "X-Household-Id": "5" }
   });
