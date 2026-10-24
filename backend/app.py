@@ -41,8 +41,13 @@ def current_available(db: Session, household: Household) -> int:
         Trade.seller_id == household.id, Trade.status == "completed")) or 0
     return max(0, household.generation_wh - household.consumption_wh - int(committed))
 
+def is_expired(expires_at: datetime) -> bool:
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at <= datetime.now(timezone.utc)
+
 def offer_available(db: Session, offer: Offer) -> int:
-    if offer.status != "open" or offer.expires_at <= datetime.now(timezone.utc):
+    if offer.status != "open" or is_expired(offer.expires_at):
         return 0
     committed = db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
         Trade.offer_id == offer.id, Trade.status == "completed")) or 0
@@ -274,7 +279,7 @@ def purchase_offer(offer_id: int, payload: PurchaseRequest,
             db.commit()
             return serialize_trade(previous, seller, buyer)
         offer = db.get(Offer, offer_id)
-        if not offer or offer.status != "open" or offer.expires_at <= datetime.now(timezone.utc):
+        if not offer or offer.status != "open" or is_expired(offer.expires_at):
             raise HTTPException(404, "Offer not found, expired, or withdrawn")
         seller = db.get(Household, offer.household_id)
         if not seller.share_surplus:
