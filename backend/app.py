@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import func, select, text
+from sqlalchemy import func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -88,6 +88,13 @@ def require_reviewer(ctx: dict):
 
 def seed():
     Base.metadata.create_all(bind=engine)
+    # Additive migration for databases created before the offer cap was introduced.
+    household_columns = {column["name"] for column in inspect(engine).get_columns("households")}
+    if "offer_limit_wh" not in household_columns:
+        with engine.begin() as connection:
+            connection.execute(text(
+                "ALTER TABLE households ADD COLUMN offer_limit_wh INTEGER NOT NULL DEFAULT 100000"
+            ))
     with SessionLocal() as db:
         if db.scalar(select(func.count(Household.id))) == 0:
             for name, city, locality, generation, consumption, source in CITIES:
