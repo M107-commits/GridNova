@@ -326,6 +326,7 @@ def login(payload: LoginRequest, response: Response, db: Session = Depends(get_d
     if not account or not _verify_password(payload.password, account.password_hash):
         raise HTTPException(401, "Email or password is incorrect")
     token, csrf = _new_session(db, account)
+    audit(db, account.role, "account_signed_in", "account", account.id, account.household_id)
     db.commit()
     _set_session(response, token, csrf)
     household = db.get(Household, account.household_id)
@@ -347,6 +348,9 @@ def logout(response: Response, gridnova_session: str | None = Cookie(default=Non
     if gridnova_session:
         session = db.get(AuthSession, _token_digest(gridnova_session))
         if session:
+            account = db.get(UserAccount, session.account_id)
+            if account:
+                audit(db, account.role, "account_signed_out", "account", account.id, account.household_id)
             db.delete(session)
             db.commit()
     response.delete_cookie(SESSION_COOKIE, path="/", samesite="strict")
