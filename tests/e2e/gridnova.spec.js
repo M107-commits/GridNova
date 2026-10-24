@@ -36,7 +36,8 @@ test("desktop: separate buyer and seller accounts, trade ledger, settings, simul
   await page.locator('#energyEdit [name="consumption_wh"]').fill("1000");
   await page.locator("#energyEdit button").click();
   await expect(page.locator("#toast")).toContainText("Energy profile saved");
-  await page.locator("#sellEnergy").click();
+  await page.locator('#sidenav [data-page="market"]').click();
+  await page.locator("#listOffer").click();
   await expect(page.getByRole("dialog", { name: "List household surplus" })).toBeVisible();
   const listing = page.locator("#listingForm");
   await listing.locator('[name="quantity_wh"]').fill("1000");
@@ -70,7 +71,6 @@ test("desktop: separate buyer and seller accounts, trade ledger, settings, simul
   await page.locator("#trades [data-cancel]").first().click();
   await expect(page.locator("#toast")).toContainText("Trade cancelled");
 
-  await page.locator("#settings").click({ position: { x: 10, y: 10 } }).catch(() => {});
   await page.locator('#sidenav [data-page="settings"]').click();
   await page.locator('#settingsForm [name="preferred_price_paise"]').fill("1350");
   await page.locator("#settingsForm button").click();
