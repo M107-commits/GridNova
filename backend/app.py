@@ -290,10 +290,11 @@ def health():
 
 @app.post("/api/auth/register", status_code=201)
 def register(payload: SignupRequest, response: Response, db: Session = Depends(get_db)):
-    if db.scalar(select(UserAccount.id).where(UserAccount.email == payload.email)):
-        raise HTTPException(409, "An account with this email already exists")
+    password_hash = _hash_password(payload.password)
     db.execute(text("BEGIN IMMEDIATE"))
     try:
+        if db.scalar(select(UserAccount.id).where(UserAccount.email == payload.email)):
+            raise HTTPException(409, "An account with this email already exists")
         household = Household(name=payload.household_name, city=payload.city,
             locality=payload.locality, source="solar", capacity_wh=8000,
             generation_wh=0, consumption_wh=0, preferred_price_paise=1200,
@@ -301,7 +302,7 @@ def register(payload: SignupRequest, response: Response, db: Session = Depends(g
         db.add(household)
         db.flush()
         account = UserAccount(household_id=household.id, email=payload.email,
-                              display_name=payload.name, password_hash=_hash_password(payload.password), role="homeowner")
+                              display_name=payload.name, password_hash=password_hash, role="homeowner")
         db.add(account)
         db.flush()
         audit(db, "homeowner", "account_created", "household", household.id, household.id,
