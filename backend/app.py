@@ -39,7 +39,9 @@ def audit(db: Session, role: str, action: str, entity: str, entity_id: int | Non
 def current_available(db: Session, household: Household) -> int:
     committed = db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
         Trade.seller_id == household.id, Trade.status == "completed")) or 0
-    return max(0, household.generation_wh - household.consumption_wh - int(committed))
+    physical = max(0, household.generation_wh - household.consumption_wh - int(committed))
+    remaining_listing = max(0, household.offer_limit_wh - int(committed))
+    return min(physical, remaining_listing)
 
 def current_demand(db: Session, household: Household) -> int:
     bought = db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
@@ -185,8 +187,12 @@ def create_offer(payload: OfferCreate, ctx: dict = Depends(role_context), db: Se
     h = require_household(db, payload.household_id, ctx)
     if not h.share_surplus:
         raise HTTPException(409, "Surplus sharing is paused for this household")
-    if payload.quantity_wh > current_available(db, h):
+    sold = db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
+        Trade.seller_id == h.id, Trade.status == "completed")) or 0
+    physical = max(0, h.generation_wh - h.consumption_wh - int(sold))
+    if payload.quantity_wh > physical:
         raise HTTPException(409, "Offer quantity exceeds available surplus")
+    h.offer_limit_wh = int(sold) + payload.quantity_wh
     h.preferred_price_paise = payload.price_paise_per_kwh
     audit(db, ctx["role"], "offer_listed", "household", h.id, h.id,
           {"quantity_wh": payload.quantity_wh, "price_paise_per_kwh": payload.price_paise_per_kwh})
