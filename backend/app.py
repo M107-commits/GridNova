@@ -212,6 +212,10 @@ def require_reviewer(ctx: dict):
 def seed(target_engine=engine):
     """Create or migrate and seed the supplied database."""
     Base.metadata.create_all(bind=target_engine)
+    account_columns = {column["name"] for column in inspect(target_engine).get_columns("user_accounts")}
+    if "display_name" not in account_columns:
+        with target_engine.begin() as connection:
+            connection.execute(text("ALTER TABLE user_accounts ADD COLUMN display_name VARCHAR(100) NOT NULL DEFAULT ''"))
     household_columns = {column["name"] for column in inspect(target_engine).get_columns("households")}
     if "offer_limit_wh" not in household_columns:
         with target_engine.begin() as connection:
@@ -297,7 +301,7 @@ def register(payload: SignupRequest, response: Response, db: Session = Depends(g
         db.add(household)
         db.flush()
         account = UserAccount(household_id=household.id, email=payload.email,
-                              password_hash=_hash_password(payload.password), role="homeowner")
+                              display_name=payload.name, password_hash=_hash_password(payload.password), role="homeowner")
         db.add(account)
         db.flush()
         audit(db, "homeowner", "account_created", "household", household.id, household.id,
@@ -305,7 +309,7 @@ def register(payload: SignupRequest, response: Response, db: Session = Depends(g
         token, csrf = _new_session(db, account)
         db.commit()
         _set_session(response, token, csrf)
-        return {"id": account.id, "email": account.email,
+        return {"id": account.id, "email": account.email, "name": account.display_name,
                 "household_id": household.id, "household_name": household.name,
                 "role": account.role}
     except IntegrityError:
@@ -324,7 +328,7 @@ def login(payload: LoginRequest, response: Response, db: Session = Depends(get_d
     db.commit()
     _set_session(response, token, csrf)
     household = db.get(Household, account.household_id)
-    return {"id": account.id, "email": account.email,
+    return {"id": account.id, "email": account.email, "name": account.display_name,
             "household_id": account.household_id, "household_name": household.name,
             "role": account.role}
 
@@ -332,7 +336,7 @@ def login(payload: LoginRequest, response: Response, db: Session = Depends(get_d
 def auth_me(ctx: dict = Depends(role_context), db: Session = Depends(get_db)):
     account = db.get(UserAccount, ctx["account_id"])
     household = db.get(Household, ctx["household_id"])
-    return {"id": account.id, "email": account.email,
+    return {"id": account.id, "email": account.email, "name": account.display_name,
             "household_id": household.id, "household_name": household.name,
             "role": account.role}
 
