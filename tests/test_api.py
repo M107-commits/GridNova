@@ -91,7 +91,7 @@ def test_owner_scope_duplicate_commitment_and_cancel_ledger(client):
     rows = client.get("/api/trades").json()
     assert len(rows) == 1 and rows[0]["status"] == "cancelled"
     assert next(h for h in client.get("/api/households").json() if h["id"] == 1)["surplus_wh"] == 4000
-    assert any(e["action"] == "trade_cancelled" for e in client.get("/api/audit-events").json())
+    assert any(e["action"] == "trade_cancelled" for e in client.get("/api/audit-events", headers=owner(2)).json())
 
 def test_certificate_uniqueness_and_reviewer_permissions(client):
     data = {"household_id": 1, "quantity_wh": 1200, "source": "solar",
@@ -108,7 +108,7 @@ def test_certificate_uniqueness_and_reviewer_permissions(client):
     assert verified.status_code == 200
     again = client.post(f"/api/generation-records/{record_id}/reject", headers=reviewer, json={"note": "late"})
     assert again.status_code == 409
-    assert any(e["action"] == "generation_verified" for e in client.get("/api/audit-events").json())
+    assert any(e["action"] == "generation_verified" for e in client.get("/api/audit-events", headers=owner(1)).json())
 
 def test_simulation_and_settings_are_persisted_and_audited(client):
     role = owner(2)
@@ -119,7 +119,7 @@ def test_simulation_and_settings_are_persisted_and_audited(client):
     sim = client.post("/api/simulations/run", headers=role,
                       json={"solar_percent": 70, "demand_percent": 50})
     assert sim.status_code == 200 and sim.json()["simulation_only"] is True
-    actions = [e["action"] for e in client.get("/api/audit-events").json()]
+    actions = [e["action"] for e in client.get("/api/audit-events", headers=role).json()]
     assert "settings_updated" in actions and "simulation_run" in actions
 
 def test_competing_purchases_cannot_oversell(client):
