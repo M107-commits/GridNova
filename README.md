@@ -24,12 +24,12 @@ Open http://127.0.0.1:8000 for the client and http://127.0.0.1:8000/docs for the
 pytest -q
 ```
 
-The API tests use an isolated temporary SQLite database and exercise household scope, generation reference uniqueness, review permissions, round-half-up paise accounting, duplicate commitments, cancellation and release, audit persistence, simulator/settings persistence, and concurrent purchases.
+The API tests use an isolated temporary SQLite database and exercise household scope, generation reference uniqueness, review permissions, round-half-up paise accounting, offer expiry/withdrawal, idempotent retries, duplicate commitments, cancellation and release, audit persistence, simulator/settings persistence, and concurrent purchases.
 
 ## Application features
 
 - **Overview:** API-backed household and community generation, consumption, surplus, demand, trade activity, and illustrative impact estimates.
-- **Energy Marketplace:** live surplus offers, source/city search and sorting, listing, and purchase dialogs.
+- **Energy Marketplace:** persisted independent offers with expiry and withdrawal, source/city search and sorting, listing, and purchase dialogs. Purchases require idempotency keys for safe retries.
 - **My Energy:** edit synthetic generation/consumption, set a price, and submit generation records.
 - **Transactions:** search and filter persistent trades, inspect details, cancel eligible trades, and export CSV.
 - **Verification & Impact:** verifier-role review actions, generation records, community analytics, and clearly labeled impact estimates.
