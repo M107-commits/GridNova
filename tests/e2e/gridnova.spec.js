@@ -6,7 +6,7 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   expect(reset.status()).toBe(200);
   await page.goto("/");
   await expect(page.locator("#household option")).toHaveCount(5);
-  await expect(page.locator("#overviewBody")).toContainText("FICTIONAL HOUSEHOLD");
+  await expect(page.locator("#overviewBody")).toContainText("YOUR HOME");
   await expect(page.locator("#sidenav [data-page]")).toHaveCount(7);
 
   // Increase this fictional seller's production so it has unlisted energy to offer.
@@ -24,7 +24,7 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   await listedDialog.locator('[name="price_paise_per_kwh"]').fill("900");
   await listedDialog.locator('[name="expires_in_hours"]').selectOption("12");
   await listedDialog.locator('button[type="submit"], button.primary').click();
-  await expect(page.locator("#toast")).toContainText("Surplus listed");
+  await expect(page.locator("#toast")).toContainText("Offer is live");
   const response = await page.request.get("/api/offers?seller_household_id=5", {
     headers: { "X-Demo-Role": "homeowner", "X-Household-Id": "5" }
   });
@@ -41,7 +41,7 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   const purchaseDialog = page.locator("#purchaseForm");
   await purchaseDialog.locator('[name="quantity_wh"]').fill("200");
   await purchaseDialog.locator('button[type="submit"], button.primary').click();
-  await expect(page.locator("#toast")).toContainText("purchase recorded");
+  await expect(page.locator("#toast")).toContainText("Purchase added to activity");
   const apiResult = await page.evaluate(async (offerId) => {
     const headers = {
       "Content-Type": "application/json", "X-Demo-Role": "homeowner",
