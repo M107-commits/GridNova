@@ -284,9 +284,74 @@ async def local_demo_boundary(request, call_next):
 def health():
     return {"status": "ok", "simulation": True}
 
+@app.post("/api/auth/register", status_code=201)
+def register(payload: SignupRequest, response: Response, db: Session = Depends(get_db)):
+    if db.scalar(select(UserAccount.id).where(UserAccount.email == payload.email)):
+        raise HTTPException(409, "An account with this email already exists")
+    db.execute(text("BEGIN IMMEDIATE"))
+    try:
+        household = Household(name=payload.household_name, city=payload.city,
+            locality=payload.locality, source="solar", capacity_wh=8000,
+            generation_wh=0, consumption_wh=0, preferred_price_paise=1200,
+            share_surplus=True)
+        db.add(household)
+        db.flush()
+        account = UserAccount(household_id=household.id, email=payload.email,
+                              password_hash=_hash_password(payload.password), role="homeowner")
+        db.add(account)
+        db.flush()
+        audit(db, "homeowner", "account_created", "household", household.id, household.id,
+              {"email": payload.email})
+        token, csrf = _new_session(db, account)
+        db.commit()
+        _set_session(response, token, csrf)
+        return {"id": account.id, "email": account.email,
+                "household_id": household.id, "household_name": household.name,
+                "role": account.role}
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "An account with this email already exists")
+    except Exception:
+        db.rollback()
+        raise
+
+@app.post("/api/auth/login")
+def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)):
+    account = db.scalar(select(UserAccount).where(UserAccount.email == payload.email))
+    if not account or not _verify_password(payload.password, account.password_hash):
+        raise HTTPException(401, "Email or password is incorrect")
+    token, csrf = _new_session(db, account)
+    db.commit()
+    _set_session(response, token, csrf)
+    household = db.get(Household, account.household_id)
+    return {"id": account.id, "email": account.email,
+            "household_id": account.household_id, "household_name": household.name,
+            "role": account.role}
+
+@app.get("/api/auth/me")
+def auth_me(ctx: dict = Depends(role_context), db: Session = Depends(get_db)):
+    account = db.get(UserAccount, ctx["account_id"])
+    household = db.get(Household, ctx["household_id"])
+    return {"id": account.id, "email": account.email,
+            "household_id": household.id, "household_name": household.name,
+            "role": account.role}
+
+@app.post("/api/auth/logout")
+def logout(response: Response, gridnova_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+           db: Session = Depends(get_db)):
+    if gridnova_session:
+        session = db.get(AuthSession, _token_digest(gridnova_session))
+        if session:
+            db.delete(session)
+            db.commit()
+    response.delete_cookie(SESSION_COOKIE, path="/", samesite="strict")
+    response.delete_cookie(CSRF_COOKIE, path="/", samesite="strict")
+    return {"status": "signed_out"}
+
 @app.get("/api/households")
-def households(db: Session = Depends(get_db)):
-    return [serialize_household(db, h) for h in db.scalars(select(Household).order_by(Household.city))]
+def households(ctx: dict = Depends(role_context), db: Session = Depends(get_db)):
+    household = db.get(Household, ctx["household_id"])
+    return [serialize_household(db, household)] if household else []
 
 @app.patch("/api/households/{household_id}/energy")
 def update_energy(household_id: int, payload: HouseholdEnergyUpdate,
