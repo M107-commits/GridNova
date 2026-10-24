@@ -295,3 +295,25 @@ def test_partial_then_full_offer_fill_removes_offer(client):
         json={"buyer_household_id": 3, "quantity_wh": 1000})
     assert final.status_code == 201
     assert all(o["id"] != 1 for o in client.get("/api/offers").json())
+
+
+def test_dashboard_default_household_scope_and_cross_household_offer_cancel(client):
+    assert client.get("/api/dashboard?household_id=1",
+        headers={"X-Demo-Role": "homeowner"}).status_code == 200
+    assert client.get("/api/dashboard?household_id=2",
+        headers={"X-Demo-Role": "homeowner"}).status_code == 403
+    denied = client.post("/api/offers/1/cancel", headers=owner(2))
+    assert denied.status_code == 403
+    offer = client.get("/api/offers?seller_household_id=1", headers=owner(1)).json()
+    assert any(item["id"] == 1 for item in offer)
+
+def test_verifier_cannot_run_audited_simulation_and_sim_input_is_bounded(client):
+    before = client.get("/api/audit-events", headers={"X-Demo-Role": "admin"}).json()
+    denied = client.post("/api/simulations/run", headers={"X-Demo-Role": "verifier"},
+        json={"solar_percent": 50, "demand_percent": 50})
+    assert denied.status_code == 403
+    too_many = client.post("/api/simulations/run", headers=owner(2),
+        json={"solar_percent": 50, "demand_percent": 50, "household_ids": [1, 2, 3, 4, 5, 6]})
+    assert too_many.status_code == 422
+    after = client.get("/api/audit-events", headers={"X-Demo-Role": "admin"}).json()
+    assert len(after) == len(before)
