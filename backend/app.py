@@ -20,7 +20,7 @@ from .schemas import (GenerationCreate, HouseholdEnergyUpdate, OfferCreate,
 
 CITIES = [
     ("Aarav Mehta", "Bengaluru", "Indiranagar", 7200, 3100, "solar"),
-    ("Kavya Reddy", "Hyderabad", "Jubilee Hills", 6800, 2800, "solar"),
+    ("Kavya Reddy", "Hyderabad", "Jubilee Hills", 2600, 4800, "solar"),
     ("Ishaan Kulkarni", "Pune", "Baner", 5400, 3400, "solar"),
     ("Meera Iyer", "Chennai", "Adyar", 6100, 4200, "solar"),
     ("Arjun Sharma", "Jaipur", "Malviya Nagar", 4900, 2600, "solar"),
@@ -97,7 +97,7 @@ def seed():
             db.flush()
             db.add_all([
                 GenerationRecord(household_id=1, quantity_wh=7200, source="solar", status="pending"),
-                GenerationRecord(household_id=2, quantity_wh=6800, source="solar",
+                GenerationRecord(household_id=2, quantity_wh=2600, source="solar",
                                  certificate_reference="DEMO-HYD-001", status="pending"),
                 GenerationRecord(household_id=3, quantity_wh=5400, source="solar", status="verified",
                                  reviewed_by="verifier"),
