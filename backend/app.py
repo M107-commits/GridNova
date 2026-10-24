@@ -209,7 +209,8 @@ def dashboard(household_id: int | None = Query(default=None), ctx: dict = Depend
 @app.get("/api/offers")
 def offers(household_id: int | None = None, seller_household_id: int | None = None,
            ctx: dict = Depends(role_context), db: Session = Depends(get_db)):
-    stmt = select(Offer).join(Household, Offer.household_id == Household.id).where(\n        Offer.status == "open", Household.share_surplus.is_(True)).order_by(Offer.price_paise_per_kwh)
+    stmt = select(Offer).join(Household, Offer.household_id == Household.id).where(
+        Offer.status == "open", Household.share_surplus.is_(True)).order_by(Offer.price_paise_per_kwh)
     if seller_household_id is not None:
         require_household(db, seller_household_id, ctx)
         stmt = stmt.where(Offer.household_id == seller_household_id)
