@@ -739,25 +739,10 @@ def update_settings(household_id: int, payload: SettingsUpdate,
             "share_surplus": h.share_surplus}
 
 @app.post("/api/reset")
-def reset_demo(ctx: dict = Depends(role_context), db: Session = Depends(get_db)):
+def reset_demo(ctx: dict = Depends(role_context)):
     if ctx["role"] != "admin":
-        raise HTTPException(403, "Choose the demo admin role to reset application data")
-    db.execute(text("BEGIN IMMEDIATE"))
-    try:
-        db.query(Trade).delete()
-        db.query(Offer).delete()
-        db.query(GenerationRecord).delete()
-        db.query(HouseholdSetting).delete()
-        db.query(AuditEvent).delete()
-        db.query(Household).delete()
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    seed(db.get_bind())
-    audit(db, "admin", "demo_reset", "application", None, None, {"seed_households": len(CITIES)})
-    db.commit()
-    return {"status": "reset", "households": len(CITIES), "simulation": True}
+        raise HTTPException(403, "An administrator account is required")
+    raise HTTPException(410, "Global reset is disabled after household accounts are enabled")
 
 @app.get("/api/trades.csv")
 def export_trades(household_id: int | None = None, ctx: dict = Depends(role_context),
