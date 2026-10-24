@@ -555,6 +555,7 @@ def reset_demo(ctx: dict = Depends(role_context), db: Session = Depends(get_db))
         db.query(Offer).delete()
         db.query(GenerationRecord).delete()
         db.query(HouseholdSetting).delete()
+        db.query(AuditEvent).delete()
         db.query(Household).delete()
         db.commit()
     except Exception:
