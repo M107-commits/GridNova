@@ -38,7 +38,7 @@ The browser suite uses real Chromium at desktop and Pixel 7 sized viewports. It 
 
 ## Verification results
 
-Last run in the connected repository workspace:
+Latest verification ran against the connected repository revision in an isolated scratch checkout:
 
 - `python -m pytest -q`: **21 passed**. One upstream Starlette deprecation warning notes that its TestClient currently uses httpx; it did not affect the test results.
 - `npm run test:e2e`: **2 passed, 2 skipped**. The two projects each run their matching scenario (one desktop workflow and one mobile navigation workflow); the other scenario is explicitly skipped in each project.
