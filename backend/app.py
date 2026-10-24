@@ -47,6 +47,24 @@ def is_expired(expires_at: datetime) -> bool:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     return expires_at <= datetime.now(timezone.utc)
 
+def completed_offer_quantity(db: Session, offer: Offer) -> int:
+    return int(db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
+        Trade.offer_id == offer.id, Trade.status == "completed")) or 0)
+
+def offer_lifecycle_status(db: Session, offer: Offer) -> str:
+    if offer.status == "cancelled":
+        return "withdrawn"
+    if offer.status != "open":
+        return offer.status
+    if is_expired(offer.expires_at):
+        return "expired"
+    sold = completed_offer_quantity(db, offer)
+    if sold >= offer.quantity_wh:
+        return "filled"
+    if sold:
+        return "partially_filled"
+    return "open"
+
 def offer_available(db: Session, offer: Offer) -> int:
     seller = db.get(Household, offer.household_id)
     if not seller or not seller.share_surplus:
@@ -60,9 +78,8 @@ def offer_available(db: Session, offer: Offer) -> int:
     for candidate in ordered:
         if is_expired(candidate.expires_at):
             continue
-        sold = db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
-            Trade.offer_id == candidate.id, Trade.status == "completed")) or 0
-        candidate_remaining = max(0, candidate.quantity_wh - int(sold))
+        sold = completed_offer_quantity(db, candidate)
+        candidate_remaining = max(0, candidate.quantity_wh - sold)
         allocated = min(candidate_remaining, remaining_physical)
         if candidate.id == offer.id:
             return allocated
@@ -87,22 +104,26 @@ def serialize_household(db: Session, h: Household):
         "share_surplus": h.share_surplus,
     }
 
-def serialize_trade(t: Trade, seller: Household, buyer: Household):
+def serialize_trade(t: Trade, seller: Household, buyer: Household,
+                    current_offer_status: str | None = None):
     return {"id": t.id, "seller_id": t.seller_id, "seller_name": seller.name,
             "seller_city": seller.city, "buyer_id": t.buyer_id, "buyer_name": buyer.name,
             "buyer_city": buyer.city, "quantity_wh": t.quantity_wh,
             "price_paise_per_kwh": t.price_paise_per_kwh, "total_paise": t.total_paise,
-            "offer_id": t.offer_id, "status": t.status, "created_at": t.created_at.isoformat(),
+            "offer_id": t.offer_id, "offer_status": current_offer_status,
+            "status": t.status, "created_at": t.created_at.isoformat(),
             "cancelled_at": t.cancelled_at.isoformat() if t.cancelled_at else None}
 
 def serialize_offer(db: Session, offer: Offer):
     seller = db.get(Household, offer.household_id)
+    sold = completed_offer_quantity(db, offer)
     return {"id": offer.id, "household_id": seller.id, "seller_household_id": seller.id,
             "seller_name": seller.name, "city": seller.city, "locality": seller.locality,
             "source": seller.source, "quantity_wh": offer_available(db, offer),
-            "listed_quantity_wh": offer.quantity_wh,
+            "listed_quantity_wh": offer.quantity_wh, "filled_quantity_wh": sold,
             "price_paise_per_kwh": offer.price_paise_per_kwh,
-            "status": offer.status, "created_at": offer.created_at.isoformat(),
+            "status": offer_lifecycle_status(db, offer),
+            "created_at": offer.created_at.isoformat(),
             "expires_at": offer.expires_at.isoformat()}
 
 def role_context(x_demo_role: str = Header(default="homeowner"),
@@ -204,15 +225,38 @@ def households(db: Session = Depends(get_db)):
 @app.patch("/api/households/{household_id}/energy")
 def update_energy(household_id: int, payload: HouseholdEnergyUpdate,
                   ctx: dict = Depends(role_context), db: Session = Depends(get_db)):
-    h = require_household(db, household_id, ctx)
-    h.generation_wh = payload.generation_wh
-    h.consumption_wh = payload.consumption_wh
-    if payload.preferred_price_paise is not None:
-        h.preferred_price_paise = payload.preferred_price_paise
-    audit(db, ctx["role"], "energy_profile_updated", "household", h.id, h.id,
-          {"generation_wh": h.generation_wh, "consumption_wh": h.consumption_wh})
-    db.commit()
-    return serialize_household(db, h)
+    db.execute(text("BEGIN IMMEDIATE"))
+    try:
+        h = require_household(db, household_id, ctx)
+        completed_sales = int(db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
+            Trade.seller_id == h.id, Trade.status == "completed")) or 0)
+        completed_buys = int(db.scalar(select(func.coalesce(func.sum(Trade.quantity_wh), 0)).where(
+            Trade.buyer_id == h.id, Trade.status == "completed")) or 0)
+        reserved_offers = sum(
+            max(0, offer.quantity_wh - completed_offer_quantity(db, offer))
+            for offer in db.scalars(select(Offer).where(
+                Offer.household_id == h.id, Offer.status == "open"))
+            if not is_expired(offer.expires_at)
+        )
+        proposed_surplus = max(0, payload.generation_wh - payload.consumption_wh)
+        if proposed_surplus < completed_sales + reserved_offers:
+            raise HTTPException(409,
+                "This change would put listed or sold energy above your new surplus. Withdraw offers or choose different values.")
+        proposed_demand = max(0, payload.consumption_wh - payload.generation_wh)
+        if proposed_demand < completed_buys:
+            raise HTTPException(409,
+                "This change would put completed purchases above your new energy need. Choose different values.")
+        h.generation_wh = payload.generation_wh
+        h.consumption_wh = payload.consumption_wh
+        if payload.preferred_price_paise is not None:
+            h.preferred_price_paise = payload.preferred_price_paise
+        audit(db, ctx["role"], "energy_profile_updated", "household", h.id, h.id,
+              {"generation_wh": h.generation_wh, "consumption_wh": h.consumption_wh})
+        db.commit()
+        return serialize_household(db, h)
+    except Exception:
+        db.rollback()
+        raise
 
 @app.get("/api/dashboard")
 def dashboard(household_id: int | None = Query(default=None), ctx: dict = Depends(role_context),
@@ -231,7 +275,8 @@ def dashboard(household_id: int | None = Query(default=None), ctx: dict = Depend
     recent = []
     for t in db.scalars(select(Trade).order_by(Trade.created_at.desc()).limit(5)):
         seller, buyer = db.get(Household, t.seller_id), db.get(Household, t.buyer_id)
-        recent.append(serialize_trade(t, seller, buyer))
+        recent.append(serialize_trade(t, seller, buyer,
+            offer_lifecycle_status(db, db.get(Offer, t.offer_id)) if t.offer_id else None))
     return {
         "simulation": True, "household": serialize_household(db, selected),
         "totals": {"generation_wh": sum(h.generation_wh for h in all_homes),
@@ -245,12 +290,13 @@ def dashboard(household_id: int | None = Query(default=None), ctx: dict = Depend
 @app.get("/api/offers")
 def offers(household_id: int | None = None, seller_household_id: int | None = None,
            ctx: dict = Depends(role_context), db: Session = Depends(get_db)):
-    stmt = select(Offer).join(Household, Offer.household_id == Household.id).where(
-        Offer.status == "open", Household.share_surplus.is_(True)).order_by(Offer.price_paise_per_kwh)
     if seller_household_id is not None:
         require_household(db, seller_household_id, ctx)
-        stmt = stmt.where(Offer.household_id == seller_household_id)
-    elif household_id is not None:
+        stmt = select(Offer).where(Offer.household_id == seller_household_id).order_by(Offer.created_at.desc())
+        return [serialize_offer(db, offer) for offer in db.scalars(stmt)]
+    stmt = select(Offer).join(Household, Offer.household_id == Household.id).where(
+        Offer.status == "open", Household.share_surplus.is_(True)).order_by(Offer.price_paise_per_kwh)
+    if household_id is not None:
         stmt = stmt.where(Offer.household_id != household_id)
     return [serialize_offer(db, offer) for offer in db.scalars(stmt)
             if offer_available(db, offer) > 0]
@@ -314,7 +360,8 @@ def purchase_offer(offer_id: int, payload: PurchaseRequest,
                 raise HTTPException(409, "Idempotency key was already used for a different purchase")
             seller = db.get(Household, previous.seller_id)
             db.commit()
-            return serialize_trade(previous, seller, buyer)
+            return serialize_trade(previous, seller, buyer,
+                offer_lifecycle_status(db, db.get(Offer, previous.offer_id)) if previous.offer_id else None)
         offer = db.get(Offer, offer_id)
         if not offer or offer.status != "open" or is_expired(offer.expires_at):
             raise HTTPException(404, "Offer not found, expired, or withdrawn")
@@ -342,7 +389,8 @@ def purchase_offer(offer_id: int, payload: PurchaseRequest,
               {"seller_id": seller.id, "offer_id": offer.id,
                "quantity_wh": payload.quantity_wh, "total_paise": total})
         db.commit()
-        return serialize_trade(trade, seller, buyer)
+        return serialize_trade(trade, seller, buyer,
+            offer_lifecycle_status(db, offer) if offer else None)
     except Exception:
         db.rollback()
         raise
@@ -363,7 +411,8 @@ def trades(household_id: int | None = None, status: str | None = None,
     rows = []
     for t in db.scalars(stmt):
         seller, buyer = db.get(Household, t.seller_id), db.get(Household, t.buyer_id)
-        item = serialize_trade(t, seller, buyer)
+        item = serialize_trade(t, seller, buyer,
+            offer_lifecycle_status(db, db.get(Offer, t.offer_id)) if t.offer_id else None)
         if search and search.lower() not in json.dumps(item).lower():
             continue
         rows.append(item)
@@ -388,7 +437,9 @@ def cancel_trade(trade_id: int, ctx: dict = Depends(role_context), db: Session =
               {"quantity_wh_released": trade.quantity_wh})
         seller, buyer = db.get(Household, trade.seller_id), db.get(Household, trade.buyer_id)
         db.commit()
-        return serialize_trade(trade, seller, buyer)
+        current_offer = db.get(Offer, trade.offer_id) if trade.offer_id else None
+        return serialize_trade(trade, seller, buyer,
+            offer_lifecycle_status(db, current_offer) if current_offer else None)
     except Exception:
         db.rollback()
         raise
