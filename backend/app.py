@@ -218,8 +218,10 @@ def update_energy(household_id: int, payload: HouseholdEnergyUpdate,
 def dashboard(household_id: int | None = Query(default=None), ctx: dict = Depends(role_context),
               db: Session = Depends(get_db)):
     selected_id = household_id or ctx["household_id"] or 1
-    if ctx["role"] == "homeowner" and ctx["household_id"] is not None and selected_id != ctx["household_id"]:
-        raise HTTPException(403, "Select your own household in the demo selector")
+    if ctx["role"] == "homeowner":
+        owner_id = ctx["household_id"] or 1
+        if selected_id != owner_id:
+            raise HTTPException(403, "Select your own household in the demo selector")
     selected = db.get(Household, selected_id)
     if not selected:
         raise HTTPException(404, "Household not found")
@@ -500,6 +502,8 @@ def analytics(db: Session = Depends(get_db)):
 @app.post("/api/simulations/run")
 def run_simulation(payload: SimulationRequest, ctx: dict = Depends(role_context),
                    db: Session = Depends(get_db)):
+    if ctx["role"] == "verifier":
+        raise HTTPException(403, "Verifier role is review-only")
     homes = list(db.scalars(select(Household).where(
         Household.id.in_(payload.household_ids) if payload.household_ids else True)))
     if not homes:
