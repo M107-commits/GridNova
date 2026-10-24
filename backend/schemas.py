@@ -10,6 +10,7 @@ class OfferCreate(BaseModel):
     household_id: int
     quantity_wh: int = Field(gt=0, le=100_000)
     price_paise_per_kwh: int = Field(ge=0, le=100_000)
+    expires_in_hours: int = Field(default=24, ge=1, le=168)
 
 class PurchaseRequest(BaseModel):
     buyer_household_id: int
