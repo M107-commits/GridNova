@@ -177,7 +177,7 @@ def test_offer_records_expire_and_can_be_withdrawn(client):
     withdrawn = client.post(f"/api/offers/{offer_id}/cancel", headers=owner(5))
     assert withdrawn.status_code == 200 and withdrawn.json()["status"] == "cancelled"
     remaining = client.get("/api/offers?seller_household_id=5", headers=owner(5)).json()
-    assert all(o["id"] != offer_id for o in remaining)
+    assert next(o for o in remaining if o["id"] == offer_id)["status"] == "withdrawn"
 
 def test_purchase_requires_idempotency_key(client):
     result = client.post("/api/offers/1/purchase", headers=owner(2),
@@ -336,3 +336,50 @@ def test_generation_rejection_is_audited_and_final(client):
     assert retry.status_code == 409
     events = client.get("/api/audit-events", headers={"X-Demo-Role": "admin"}).json()
     assert any(event["action"] == "generation_rejected" for event in events)
+
+
+def test_energy_profile_cannot_invalidate_open_offers_or_completed_trades(client):
+    too_low_for_listing = client.patch("/api/households/1/energy", headers=owner(1),
+        json={"generation_wh": 4900, "consumption_wh": 1000})
+    assert too_low_for_listing.status_code == 409
+    assert client.post("/api/offers/1/cancel", headers=owner(1)).status_code == 200
+    updated = client.patch("/api/households/1/energy", headers=owner(1),
+        json={"generation_wh": 4900, "consumption_wh": 1000})
+    assert updated.status_code == 200
+    made = client.post("/api/offers", headers=owner(1), json={
+        "household_id": 1, "quantity_wh": 2000, "price_paise_per_kwh": 700})
+    assert made.status_code == 201
+    bought = client.post(f"/api/offers/{made.json()['id']}/purchase",
+        headers=purchase_headers(2, "profile-lock-sale-key"),
+        json={"buyer_household_id": 2, "quantity_wh": 1000})
+    assert bought.status_code == 201
+    seller_change = client.patch("/api/households/1/energy", headers=owner(1),
+        json={"generation_wh": 2900, "consumption_wh": 1000})
+    assert seller_change.status_code == 409
+    buyer_change = client.patch("/api/households/2/energy", headers=owner(2),
+        json={"generation_wh": 1000, "consumption_wh": 1900})
+    assert buyer_change.status_code == 409
+
+def test_offer_lifecycle_statuses_are_visible_in_seller_and_trade_views(client):
+    made = client.post("/api/offers", headers=owner(5), json={
+        "household_id": 5, "quantity_wh": 500, "price_paise_per_kwh": 900})
+    offer_id = made.json()["id"]
+    partial = client.post(f"/api/offers/{offer_id}/purchase",
+        headers=purchase_headers(2, "lifecycle-partial-key"),
+        json={"buyer_household_id": 2, "quantity_wh": 100})
+    assert partial.status_code == 201
+    assert partial.json()["offer_status"] == "partially_filled"
+    own = client.get("/api/offers?seller_household_id=5", headers=owner(5)).json()
+    row = next(item for item in own if item["id"] == offer_id)
+    assert row["status"] == "partially_filled"
+    assert row["filled_quantity_wh"] == 100 and row["quantity_wh"] == 400
+    assert client.post(f"/api/offers/{offer_id}/cancel", headers=owner(5)).status_code == 200
+    own = client.get("/api/offers?seller_household_id=5", headers=owner(5)).json()
+    assert next(item for item in own if item["id"] == offer_id)["status"] == "withdrawn"
+    expired = client.post("/api/offers", headers=owner(5), json={
+        "household_id": 5, "quantity_wh": 100, "price_paise_per_kwh": 900})
+    with client.test_session() as db:
+        db.get(Offer, expired.json()["id"]).expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.commit()
+    own = client.get("/api/offers?seller_household_id=5", headers=owner(5)).json()
+    assert next(item for item in own if item["id"] == expired.json()["id"])["status"] == "expired"
