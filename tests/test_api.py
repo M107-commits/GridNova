@@ -59,7 +59,7 @@ def test_purchase_accounting_round_half_up_and_audit(client):
     assert response.status_code == 201
     assert response.json()["total_paise"] == 1
     assert client.get("/api/households").json()[0]["id"] == 1
-    events = client.get("/api/audit-events").json()
+    events = client.get("/api/audit-events", headers=owner(2)).json()
     assert any(e["action"] == "trade_purchased" for e in events)
     seller = next(h for h in client.get("/api/households").json() if h["id"] == 1)
     assert seller["surplus_wh"] == 3999
