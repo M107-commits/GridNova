@@ -1,12 +1,13 @@
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 
-from backend.app import app
+from backend.app import app, _hash_password
 from backend.database import Base, get_db
-from backend.models import Household, Offer, Trade, GenerationRecord, AuditEvent
+from backend.models import Household, Offer, Trade, GenerationRecord, AuditEvent, UserAccount, AuthSession
 
 def household(name, generation, consumption, price=1200, share=True):
     return Household(name=name, city="Bengaluru", locality="Demo Block", source="solar",
@@ -35,6 +36,26 @@ def client(tmp_path):
             household("Fifth Home", 4500, 2000),
         ])
         db.flush()
+        accounts = []
+        for hid in range(1, 6):
+            account = UserAccount(household_id=hid, email=f"home{hid}@example.test",
+                display_name=f"Home {hid}", password_hash=_hash_password("GridNova-test-password"),
+                role="homeowner")
+            db.add(account)
+            accounts.append(("homeowner", hid, account))
+        accounts.extend([
+            ("verifier", 2, UserAccount(household_id=2, email="reviewer@example.test",
+                display_name="Reviewer", password_hash=_hash_password("GridNova-test-password"), role="verifier")),
+            ("admin", 1, UserAccount(household_id=1, email="admin@example.test",
+                display_name="Admin", password_hash=_hash_password("GridNova-test-password"), role="admin")),
+        ])
+        for role_name, hid, account in accounts[5:]:
+            db.add(account)
+        db.flush()
+        for role_name, hid, account in accounts:
+            token = f"test-{role_name}-{hid}"
+            db.add(AuthSession(token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                account_id=account.id, expires_at=datetime.now(timezone.utc) + timedelta(hours=3)))
         db.add(Offer(household_id=1, quantity_wh=4000, price_paise_per_kwh=500,
             status="open", expires_at=datetime.now(timezone.utc) + timedelta(days=1)))
         db.commit()
@@ -52,15 +73,27 @@ def client(tmp_path):
     Base.metadata.drop_all(engine)
     engine.dispose()
 
+def account_headers(role, household_id):
+    token = f"test-{role}-{household_id}"
+    csrf = f"csrf-{role}-{household_id}"
+    return {"Cookie": f"gridnova_session={token}; gridnova_csrf={csrf}",
+            "X-CSRF-Token": csrf}
+
 def owner(household_id):
-    return {"X-Demo-Role": "homeowner", "X-Household-Id": str(household_id)}
+    return account_headers("homeowner", household_id)
+
+def reviewer_headers(household_id=2):
+    return account_headers("verifier", household_id)
+
+def admin_headers(household_id=1):
+    return account_headers("admin", household_id)
 
 def purchase_headers(household_id, key):
     return {**owner(household_id), "Idempotency-Key": key}
 
 def test_seed_shape_and_dashboard(client):
     homes = client.get("/api/households").json()
-    assert len(homes) == 5
+    assert len(homes) == 1 and homes[0]["id"] == 1
     data = client.get("/api/dashboard?household_id=1").json()
     assert data["simulation"] is True
     assert data["household"]["surplus_wh"] == 4000
@@ -126,7 +159,7 @@ def test_certificate_uniqueness_and_reviewer_permissions(client):
     record_id = a.json()["id"]
     denied = client.post(f"/api/generation-records/{record_id}/verify", headers=owner(1), json={"note": "x"})
     assert denied.status_code == 403
-    reviewer = {"X-Demo-Role": "verifier"}
+    reviewer = reviewer_headers()
     verified = client.post(f"/api/generation-records/{record_id}/verify", headers=reviewer, json={"note": "demo check"})
     assert verified.status_code == 200
     again = client.post(f"/api/generation-records/{record_id}/reject", headers=reviewer, json={"note": "late"})
@@ -239,7 +272,7 @@ def test_cancel_is_single_transition_and_verifier_cannot_mutate_household(client
         headers=purchase_headers(2, "cancel-once-key-001"),
         json={"buyer_household_id": 2, "quantity_wh": 1000})
     trade_id = response.json()["id"]
-    reviewer = {"X-Demo-Role": "verifier", "X-Household-Id": "2"}
+    reviewer = reviewer_headers(2)
     assert client.post(f"/api/trades/{trade_id}/cancel", headers=reviewer).status_code == 403
     assert client.patch("/api/households/2/energy", headers=reviewer,
         json={"generation_wh": 2000, "consumption_wh": 3000}).status_code == 403
@@ -252,9 +285,9 @@ def test_reset_reseeds_the_request_database_and_removes_offers(client):
     create = client.post("/api/offers", headers=owner(5),
         json={"household_id": 5, "quantity_wh": 500, "price_paise_per_kwh": 900})
     assert create.status_code == 201
-    reset = client.post("/api/reset", headers={"X-Demo-Role": "admin"})
+    reset = client.post("/api/reset", headers=admin_headers())
     assert reset.status_code == 200
-    assert len(client.get("/api/households").json()) == 5
+    assert len(client.get("/api/households").json()) == 1
     assert len(client.get("/api/offers").json()) == 4
     assert client.post("/api/reset", headers=owner(1)).status_code == 403
     assert any(e["action"] == "demo_reset" for e in
@@ -302,7 +335,7 @@ def test_partial_then_full_offer_fill_removes_offer(client):
 
 def test_dashboard_default_household_scope_and_cross_household_offer_cancel(client):
     assert client.get("/api/dashboard?household_id=1",
-        headers={"X-Demo-Role": "homeowner"}).status_code == 200
+        headers=owner(1)).status_code == 200
     assert client.get("/api/dashboard?household_id=2",
         headers={"X-Demo-Role": "homeowner"}).status_code == 403
     denied = client.post("/api/offers/1/cancel", headers=owner(2))
@@ -312,7 +345,7 @@ def test_dashboard_default_household_scope_and_cross_household_offer_cancel(clie
 
 def test_verifier_cannot_run_audited_simulation_and_sim_input_is_bounded(client):
     before = client.get("/api/audit-events", headers={"X-Demo-Role": "admin"}).json()
-    denied = client.post("/api/simulations/run", headers={"X-Demo-Role": "verifier"},
+    denied = client.post("/api/simulations/run", headers=reviewer_headers(),
         json={"solar_percent": 50, "demand_percent": 50})
     assert denied.status_code == 403
     too_many = client.post("/api/simulations/run", headers=owner(2),
