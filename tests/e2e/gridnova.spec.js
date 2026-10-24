@@ -8,6 +8,22 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   await expect(page.locator("#household option")).toHaveCount(5);
   await expect(page.locator("#overviewBody")).toContainText("YOUR HOME");
   await expect(page.locator("#sidenav [data-page]")).toHaveCount(7);
+  await page.keyboard.press("Tab");
+  expect(await page.evaluate(() => document.activeElement.id)).toBe("role");
+  expect(await page.evaluate(() => getComputedStyle(document.activeElement).outlineWidth)).toBe("3px");
+  await expect(page.getByRole("img", { name: "Illustrative neighborhood generation and energy use" })).toBeVisible();
+  await page.locator("#quickTour").click();
+  await expect(page.locator("#dialog")).toBeVisible();
+  await expect(page.locator("#dialog .tour-steps li")).toHaveCount(5);
+  await expect(page.locator("#dialog")).toContainText("request headers");
+  await page.locator('#dialog [data-guide-page="market"]').first().click();
+  await expect(page.locator("#market")).toBeVisible();
+  await page.locator('#sidenav [data-page="overview"]').click();
+  await page.locator("#quickTour").click();
+  await page.locator('#dialog [data-guide-role="verifier"]').click();
+  await expect(page.locator("#role")).toHaveValue("verifier");
+  await expect(page.locator("#verification")).toBeVisible();
+  await page.locator("#role").selectOption("homeowner");
 
   // Increase this fictional seller's production so it has unlisted energy to offer.
   await page.locator("#household").selectOption("5");
@@ -42,6 +58,11 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   await purchaseDialog.locator('[name="quantity_wh"]').fill("200");
   await purchaseDialog.locator('button[type="submit"], button.primary').click();
   await expect(page.locator("#toast")).toContainText("Purchase added to activity");
+  await page.locator("#household").selectOption("5");
+  await page.locator('#sidenav [data-page="my-energy"]').click();
+  await expect(page.locator("#myOffers article.offer").filter({ hasText: "Partially filled" })).toBeVisible();
+  await page.locator("#household").selectOption("2");
+  await page.locator('#sidenav [data-page="market"]').click();
   const apiResult = await page.evaluate(async (offerId) => {
     const headers = {
       "Content-Type": "application/json", "X-Demo-Role": "homeowner",
@@ -70,10 +91,12 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   expect(apiResult.firstId).toBe(apiResult.retryId);
   expect(apiResult.fillStatus).toBe(201);
   expect(apiResult.finalStatus).toBe(201);
-  const left = await page.request.get("/api/offers?seller_household_id=5", {
+  const sellerAfterFill = await page.request.get("/api/offers?seller_household_id=5", {
     headers: { "X-Demo-Role": "homeowner", "X-Household-Id": "5" }
   });
-  expect((await left.json()).some((row) => row.id === offer.id)).toBeFalsy();
+  expect((await sellerAfterFill.json()).find((row) => row.id === offer.id).status).toBe("filled");
+  const marketplaceAfterFill = await page.request.get("/api/offers?household_id=2");
+  expect((await marketplaceAfterFill.json()).some((row) => row.id === offer.id)).toBeFalsy();
 
   // Withdraw a separate listing from the My Energy page.
   await page.locator("#household").selectOption("5");
@@ -104,6 +127,7 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   await expect(targetRow).toBeVisible();
   await targetRow.locator('[data-detail]').click();
   await expect(page.locator("#tradeDetail")).toContainText("Trade #" + targetTrade.id);
+  await expect(page.locator("#tradeDetail")).toContainText("Offer #" + offer.id + " · Filled");
   page.once("dialog", (dialog) => dialog.accept());
   await targetRow.locator('[data-cancel]').click();
   await expect(page.locator("#toast")).toContainText("Trade cancelled");
