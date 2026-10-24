@@ -1,11 +1,12 @@
-from concurrent.futures import ThreadPoolExecutor\nfrom datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone\nfrom datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 
 from backend.app import app
 from backend.database import Base, get_db
-from backend.models import Household, Offer
+from backend.models import Household, Offer, Offer
 
 def household(name, generation, consumption, price=1200, share=True):
     return Household(name=name, city="Bengaluru", locality="Demo Block", source="solar",
@@ -28,6 +29,9 @@ def client(tmp_path):
             household("Third Home", 2000, 3000),
             household("Fifth Home", 4500, 2000),
         ])
+        db.flush()
+        db.add(Offer(household_id=1, quantity_wh=4000, price_paise_per_kwh=500,
+            status="open", expires_at=datetime.now(timezone.utc) + timedelta(days=1)))
         db.commit()
     def override_get_db():
         session = Session()
@@ -45,6 +49,9 @@ def client(tmp_path):
 def owner(household_id):
     return {"X-Demo-Role": "homeowner", "X-Household-Id": str(household_id)}
 
+def purchase_headers(household_id, key):
+    return {**owner(household_id), "Idempotency-Key": key}
+
 def test_seed_shape_and_dashboard(client):
     homes = client.get("/api/households").json()
     assert len(homes) == 5
@@ -54,7 +61,7 @@ def test_seed_shape_and_dashboard(client):
     assert data["household"]["eligible_demand_wh"] == 0
 
 def test_purchase_accounting_round_half_up_and_audit(client):
-    response = client.post("/api/offers/1/purchase", headers=owner(2),
+    response = client.post("/api/offers/1/purchase", headers=purchase_headers(2, "purchase-key-1"),
                            json={"buyer_household_id": 2, "quantity_wh": 1})
     assert response.status_code == 201
     assert response.json()["total_paise"] == 1
@@ -65,13 +72,13 @@ def test_purchase_accounting_round_half_up_and_audit(client):
     assert seller["surplus_wh"] == 3999
 
 def test_prevent_self_purchase_overselling_and_excess_demand(client):
-    self_buy = client.post("/api/offers/1/purchase", headers=owner(1),
+    self_buy = client.post("/api/offers/1/purchase", headers=purchase_headers(1, "purchase-key-2"),
                            json={"buyer_household_id": 1, "quantity_wh": 1})
     assert self_buy.status_code == 409
-    too_much = client.post("/api/offers/1/purchase", headers=owner(2),
+    too_much = client.post("/api/offers/1/purchase", headers=purchase_headers(2, "purchase-key-3"),
                            json={"buyer_household_id": 2, "quantity_wh": 3001})
     assert too_much.status_code == 409
-    beyond_supply = client.post("/api/offers/1/purchase", headers=owner(2),
+    beyond_supply = client.post("/api/offers/1/purchase", headers=purchase_headers(2, "purchase-key-4"),
                            json={"buyer_household_id": 2, "quantity_wh": 4001})
     assert beyond_supply.status_code == 409
 
@@ -80,9 +87,16 @@ def test_owner_scope_duplicate_commitment_and_cancel_ledger(client):
                           json={"generation_wh": 4000, "consumption_wh": 1000})
     assert denied.status_code == 403
     payload = {"buyer_household_id": 2, "quantity_wh": 1000}
-    first = client.post("/api/offers/1/purchase", headers=owner(2), json=payload)
+    keyed_headers = purchase_headers(2, "purchase-retry-key-01")
+    first = client.post("/api/offers/1/purchase", headers=keyed_headers, json=payload)
     assert first.status_code == 201
-    duplicate = client.post("/api/offers/1/purchase", headers=owner(2), json=payload)
+    retry = client.post("/api/offers/1/purchase", headers=keyed_headers, json=payload)
+    assert retry.status_code == 201 and retry.json()["id"] == first.json()["id"]
+    collision = client.post("/api/offers/1/purchase", headers=keyed_headers,
+        json={"buyer_household_id": 2, "quantity_wh": 999})
+    assert collision.status_code == 409
+    duplicate = client.post("/api/offers/1/purchase",
+        headers=purchase_headers(2, "duplicate-commit-key-01"), json=payload)
     assert duplicate.status_code == 409
     trade_id = first.json()["id"]
     cancelled = client.post(f"/api/trades/{trade_id}/cancel", headers=owner(2))
