@@ -1,6 +1,6 @@
 # GridNova — A New Era of Connected Energy
 
-GridNova is a local-first peer-to-peer renewable-energy marketplace simulation for fictional Indian households. The API uses FastAPI, SQLAlchemy, and SQLite; the client is responsive vanilla HTML, CSS, and JavaScript. Five seeded demo households represent Bengaluru, Hyderabad, Pune, Chennai, and Jaipur.
+GridNova is a local-first renewable-energy marketplace simulation. It uses FastAPI, SQLAlchemy, SQLite, and a responsive vanilla HTML/CSS/JavaScript client. The five starter households and their offers are fictional sample listings. New users create an account for one household; that account can buy energy or sell surplus without switching among other households.
 
 ## Run locally
 
@@ -16,17 +16,26 @@ pip install -r requirements.txt
 python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000
 ```
 
-Open http://127.0.0.1:8000 for the app and http://127.0.0.1:8000/docs for the API. SQLite creates `gridnova.db` in the current working directory. Set `GRIDNOVA_DATABASE_URL` to use another SQLAlchemy database URL.
+Open http://127.0.0.1:8000. Create a household account on the sign-in page, or sign in with the email and password you registered. Existing fictional starter listings remain visible in the marketplace; starter profiles do not have sign-in credentials. SQLite creates `gridnova.db` in the current working directory. Set `GRIDNOVA_DATABASE_URL` to use another SQLAlchemy database URL.
 
-## Test
+## Account and session behavior
 
-Backend/API tests:
+- Registration creates one household and one homeowner account. A household profile is tied to that account; the interface has no person or city switcher.
+- Passwords are stored as salted PBKDF2-HMAC-SHA256 hashes. Session tokens are random, stored as SHA-256 digests in SQLite, expire after 12 hours, and are sent in HttpOnly, SameSite=Strict cookies.
+- State-changing API calls require a double-submit CSRF token. Set `GRIDNOVA_COOKIE_SECURE=1` when serving over HTTPS.
+- Ownership and reviewer/admin roles come from the server-side account record. Forged `X-Demo-Role` and `X-Household-Id` headers do not grant access. Public registration can only create homeowner accounts; reviewer/admin accounts require trusted server-side provisioning.
+- The server still defaults to loopback-only access. `GRIDNOVA_ALLOW_REMOTE_DEMO=1` disables that boundary and is not a production deployment setting.
+- This is a starter authentication system, not a production identity service: there is no email verification, password reset, MFA, or login rate limiting. Use a maintained identity provider and deployment hardening before exposing real user data or remote access.
+
+## Tests
+
+Run the backend/API suite with:
 
 ```sh
 python -m pytest -q
 ```
 
-Browser tests use Playwright and run the app on port 8765. Install Node.js, install the pinned dependency, and download Chromium once:
+Browser tests use Playwright with Chromium at desktop and mobile viewports:
 
 ```sh
 npm ci
@@ -34,38 +43,18 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-The browser suite uses real Chromium at desktop and Pixel 7 sized viewports. It checks all seven page routes, household/profile editing, offer creation, partial and complete purchase fills, same-key retries, offer withdrawal, transaction details and cancellation, generation submission and verifier review, settings, the simulator, guided-tour navigation, keyboard focus, offer status display, and demo reset. Expiry is exercised against an expired database record in the API tests because the UI does not expose a clock-advance control.
-
-## Verification results
-
-Latest verification ran against the connected repository revision in an isolated scratch checkout:
-
-- `python -m pytest -q`: **23 passed**. One upstream Starlette deprecation warning notes that its TestClient currently uses httpx; it did not affect the test results.
-- `npm run test:e2e`: **2 passed, 2 skipped**. The two projects each run their matching scenario (one desktop workflow and one mobile navigation workflow); the other scenario is explicitly skipped in each project.
-- Browser checks ran in Chromium on desktop (1440×1000) and mobile (Pixel 7 profile, then explicitly 390×844). This was a real browser run, not a DOM-only check.
+The API suite includes the authenticated account fixture, ownership boundaries, forged-role denial, purchase accounting/idempotency, lifecycle, and audit behavior. Browser workflows cover account creation/sign-in, separate buyer and seller accounts, marketplace, ledger, settings, simulator, and mobile navigation. Tests have been updated for household accounts; results for this revision have not yet been run.
 
 ## Application pages
 
-- **Overview:** API-backed household and community generation, consumption, surplus, demand, ledger activity, and illustrative impact.
-- **Energy Marketplace:** searchable and sortable offers, visible open/partial/expired/withdrawn/filled states, purchase dialogs, and idempotency keys.
-- **My Energy:** edit generation and consumption, set rates, and submit generation records. Changes that would invalidate active listings or completed trades are rejected.
-- **Transactions:** search and filter the persistent ledger, inspect trade details, cancel eligible trades, and export CSV.
-- **Verification & Impact:** demo review of generation records, community analytics, and clearly labeled environmental estimates.
-- **Microgrid Simulator:** adjust solar and demand assumptions and run the server-side synthetic model.
-- **Settings:** household sharing/rate preferences and admin-only demo reset. A short guided tour walks through listing, buying, reviewing, and activity.
-- **Accessibility:** keyboard-visible focus, labelled controls and charts, and named dialogs.
-
-## Security model and audit notes
-
-The role selector and `X-Demo-Role` / `X-Household-Id` headers are a **demo convention, not authentication**. A caller who can reach the API can forge those headers. Ownership checks and reviewer-only rules enforce intended behavior in the simulation and are covered by API tests; they do not establish the caller's real identity.
-
-The API rejects non-loopback clients by default. `GRIDNOVA_ALLOW_REMOTE_DEMO=1` disables that boundary and is explicitly insecure. Do not expose this app to a network or put it behind a reverse proxy as a production service. In particular, a local proxy can make a remote caller appear loopback to this simple demo boundary. Use real identity, server-side authorization, CSRF protections, transport security, secret management, and deployment hardening before any multi-user or remote use.
-
-- Homeowners are scoped to the selected household for household-specific reads and writes. Marketplace and synthetic aggregate reads are shared.
-- Verifiers can review pending generation records but are blocked from household and trade mutation routes and simulator runs. Admin is a demo role with reset and cross-household demo actions.
-- Reset clears prior demo ledger, listing, generation, setting, and audit rows, reseeds the demo database, and records a new reset event.
-- Purchases, cancellations, offer withdrawals, and generation reviews serialize their SQLite write transactions; purchases use `BEGIN IMMEDIATE`, integer Wh/paise accounting, a unique idempotency key, and rollback on failure.
+- **Overview:** household and neighborhood energy balances, activity, and illustrative impact.
+- **Energy Marketplace:** city-scoped offers, search/sort, and purchase dialogs.
+- **My Energy:** household generation/consumption, offers, and generation record submission.
+- **Transactions:** household ledger, search/filter, details, cancellation, and CSV export.
+- **Verification & Impact:** household records and illustrative community analytics. Internal review statuses are not meter or authority verification.
+- **Microgrid Simulator:** adjust assumptions and run a synthetic model.
+- **Settings:** household sharing and offer-rate preferences.
 
 ## Simulation limits
 
-All household profiles, generation values, offers, prices, trades, and environmental estimates are synthetic. A purchase only writes a demo ledger entry; it does not transfer electricity or money. The app has no real meter connection, physical generation validation, official renewable-energy certification, or regulatory approval. “Verified” is an internal demo review status only. CO₂ values are illustrative estimates, not certified environmental claims.
+All starter household profiles, production figures, offers, prices, and environmental estimates are synthetic. A purchase writes a simulated ledger entry; it does not transfer electricity or money. The app has no real meter connection, physical generation validation, official renewable-energy certification, or regulatory approval. “Verified” means reviewed in the application only. CO₂ values are estimates, not certified environmental claims.
