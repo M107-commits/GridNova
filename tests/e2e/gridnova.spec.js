@@ -9,13 +9,13 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
 
   // Increase this fictional seller's production so it has unlisted energy to offer.
   await page.locator("#household").selectOption("5");
-  await page.locator('[data-page="my-energy"]').click();
+  await page.locator('#sidenav [data-page="my-energy"]').click();
   await page.locator('#energyEdit [name="generation_wh"]').fill("7000");
   await page.locator('#energyEdit button[type="submit"], #energyEdit button').click();
   await expect(page.locator("#toast")).toContainText("Energy profile saved");
 
   // Create an offer through the actual listing dialog.
-  await page.locator('[data-page="market"]').click();
+  await page.locator('#sidenav [data-page="market"]').click();
   await page.locator("#listOffer").click();
   const listedDialog = page.locator("#listingForm");
   await listedDialog.locator('[name="quantity_wh"]').fill("500");
@@ -34,7 +34,7 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   // A UI purchase partially fills the offer. Browser fetches retry an identical
   // request under the same key and then fill the remaining offer quantity.
   await page.locator("#household").selectOption("2");
-  await page.locator('[data-page="market"]').click();
+  await page.locator('#sidenav [data-page="market"]').click();
   await page.locator('[data-purchase="' + offer.id + '"]').click();
   const purchaseDialog = page.locator("#purchaseForm");
   await purchaseDialog.locator('[name="quantity_wh"]').fill("200");
@@ -73,7 +73,7 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   const targetTrade = (await tradeResponse.json()).find((trade) =>
     trade.offer_id === offer.id && trade.status === "completed");
   expect(targetTrade).toBeTruthy();
-  await page.locator('[data-page="transactions"]').click();
+  await page.locator('#sidenav [data-page="transactions"]').click();
   const targetRow = page.locator("#trades tr").filter({ hasText: "#" + targetTrade.id });
   await expect(targetRow).toBeVisible();
   await targetRow.locator('[data-detail]').click();
@@ -84,13 +84,13 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   await expect(page.locator("#trades")).toContainText("cancelled");
 
   // Add a generation entry and review it with the demo verifier role.
-  await page.locator('[data-page="my-energy"]').click();
+  await page.locator('#sidenav [data-page="my-energy"]').click();
   const reference = "E2E-" + Date.now();
   await page.locator('#generationForm [name="certificate_reference"]').fill(reference);
   await page.locator("#generationForm button[type=submit]").click();
   await expect(page.locator("#toast")).toContainText("submitted");
   await page.locator("#role").selectOption("verifier");
-  await page.locator('[data-page="verification"]').click();
+  await page.locator('#sidenav [data-page="verification"]').click();
   await expect(page.locator("#records")).toContainText(reference);
   page.once("dialog", (dialog) => dialog.accept("Browser demo review"));
   await page.locator("[data-verify]").first().click();
@@ -99,11 +99,11 @@ test("desktop: marketplace, idempotency, ledger, verification, settings, simulat
   // Exercise settings and the server-backed simulator.
   await page.locator("#role").selectOption("homeowner");
   await page.locator("#household").selectOption("2");
-  await page.locator('[data-page="settings"]').click();
+  await page.locator('#sidenav [data-page="settings"]').click();
   await page.locator('#settingsForm [name="preferred_price_paise"]').fill("1337");
   await page.locator("#settingsForm button[type=submit]").click();
   await expect(page.locator("#toast")).toContainText("Settings saved");
-  await page.locator('[data-page="simulator"]').click();
+  await page.locator('#sidenav [data-page="simulator"]').click();
   await page.locator("#solarInput").fill("60");
   await page.locator("#demandInput").fill("45");
   await page.locator("#runSimulation").click();
