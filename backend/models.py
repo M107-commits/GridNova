@@ -87,7 +87,7 @@ class HouseholdSetting(Base):
 class UserAccount(Base):
     __tablename__ = "user_accounts"
     id = Column(Integer, primary_key=True)
-    household_id = Column(Integer, ForeignKey("households.id", ondelete="CASCADE"), nullable=False, unique=True)
+    household_id = Column(Integer, ForeignKey("households.id", ondelete="CASCADE"), nullable=False)
     email = Column(String(254), nullable=False, unique=True, index=True)
     password_hash = Column(String(256), nullable=False)
     role = Column(String(20), nullable=False, default="homeowner")
