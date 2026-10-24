@@ -159,7 +159,20 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="GridNova API", version="1.0.0",
               description="Fictional peer-to-peer renewable energy marketplace simulation.",
               lifespan=lifespan)
-REMOTE_DEMO_ENABLED = os.getenv("GRIDNOVA_ALLOW_REMOTE_DEMO", "").lower() in {"1", "true", "yes"}\n\n@app.middleware("http")\nasync def local_demo_boundary(request, call_next):\n    host = request.client.host if request.client else ""\n    try:\n        is_loopback = ipaddress.ip_address(host).is_loopback\n    except ValueError:\n        is_loopback = host == "testclient"\n    if not is_loopback and not REMOTE_DEMO_ENABLED:\n        return JSONResponse(status_code=403, content={\n            "detail": "GridNova demo API is restricted to loopback clients. Remote demo mode is explicitly insecure."\n        })\n    return await call_next(request)
+REMOTE_DEMO_ENABLED = os.getenv("GRIDNOVA_ALLOW_REMOTE_DEMO", "").lower() in {"1", "true", "yes"}
+
+@app.middleware("http")
+async def local_demo_boundary(request, call_next):
+    host = request.client.host if request.client else ""
+    try:
+        is_loopback = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        is_loopback = host == "testclient"
+    if not is_loopback and not REMOTE_DEMO_ENABLED:
+        return JSONResponse(status_code=403, content={
+            "detail": "GridNova demo API is restricted to loopback clients. Remote demo mode is explicitly insecure."
+        })
+    return await call_next(request)
 
 @app.get("/api/health")
 def health():
@@ -342,7 +355,9 @@ def cancel_trade(trade_id: int, ctx: dict = Depends(role_context), db: Session =
         trade = db.get(Trade, trade_id)
         if not trade:
             raise HTTPException(404, "Trade not found")
-        if ctx["role"] == "verifier":\n            raise HTTPException(403, "Verifier role cannot cancel household trades")\n        if ctx["role"] != "admin" and ctx["household_id"] not in {trade.seller_id, trade.buyer_id}:
+        if ctx["role"] == "verifier":
+            raise HTTPException(403, "Verifier role cannot cancel household trades")
+        if ctx["role"] != "admin" and ctx["household_id"] not in {trade.seller_id, trade.buyer_id}:
             raise HTTPException(403, "Only a participating household can cancel this trade")
         if trade.status != "completed":
             raise HTTPException(409, "Only completed demo trades can be cancelled")
