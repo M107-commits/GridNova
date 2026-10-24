@@ -2,22 +2,26 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 import ipaddress
 import os
+import hashlib
+import hmac
+import secrets
+import base64
 from decimal import Decimal, ROUND_HALF_UP
 import json
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from .database import Base, SessionLocal, engine, get_db
-from .models import AuditEvent, GenerationRecord, Household, HouseholdSetting, Offer, Trade
+from .models import AccountSession, AuditEvent, GenerationRecord, Household, HouseholdSetting, Offer, Trade, UserAccount
 from .schemas import (GenerationCreate, HouseholdEnergyUpdate, OfferCreate,
                       PurchaseRequest, ReviewRequest, SettingsUpdate,
-                      SimulationRequest)
+                      SimulationRequest, SignupRequest, LoginRequest)
 
 CITIES = [
     ("Aarav Mehta", "Bengaluru", "Indiranagar", 7200, 3100, "solar"),
@@ -133,19 +137,69 @@ def serialize_offer(db: Session, offer: Offer):
             "created_at": offer.created_at.isoformat(),
             "expires_at": offer.expires_at.isoformat()}
 
-def role_context(x_demo_role: str = Header(default="homeowner"),
-                 x_household_id: Optional[int] = Header(default=None)):
-    # This is intentionally a presentation/demo role switcher, not authentication.
-    role = x_demo_role.lower().strip()
-    if role not in {"homeowner", "verifier", "admin"}:
-        raise HTTPException(400, "Demo role must be homeowner, verifier, or admin")
-    return {"role": role, "household_id": x_household_id}
+SESSION_COOKIE = "gridnova_session"
+CSRF_COOKIE = "gridnova_csrf"
+SESSION_TTL = timedelta(hours=12)
+PASSWORD_ITERATIONS = 310_000
+
+def _hash_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PASSWORD_ITERATIONS)
+    return "pbkdf2_sha256$" + str(PASSWORD_ITERATIONS) + "$" + base64.urlsafe_b64encode(salt).decode() + "$" + base64.urlsafe_b64encode(digest).decode()
+
+def _verify_password(password: str, encoded: str) -> bool:
+    try:
+        algorithm, rounds, salt_text, digest_text = encoded.split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        salt = base64.urlsafe_b64decode(salt_text.encode())
+        expected = base64.urlsafe_b64decode(digest_text.encode())
+        actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, int(rounds))
+        return hmac.compare_digest(actual, expected)
+    except (ValueError, TypeError):
+        return False
+
+def _token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+def _set_session(response: Response, raw_token: str, csrf: str):
+    secure = os.getenv("GRIDNOVA_COOKIE_SECURE", "").lower() in {"1", "true", "yes"}
+    response.set_cookie(SESSION_COOKIE, raw_token, max_age=int(SESSION_TTL.total_seconds()),
+                        httponly=True, secure=secure, samesite="strict", path="/")
+    response.set_cookie(CSRF_COOKIE, csrf, max_age=int(SESSION_TTL.total_seconds()),
+                        httponly=False, secure=secure, samesite="strict", path="/")
+
+def _new_session(db: Session, account: UserAccount):
+    token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
+    db.add(AccountSession(token_hash=_token_digest(token), account_id=account.id,
+                          expires_at=datetime.now(timezone.utc) + SESSION_TTL))
+    return token, csrf
+
+def role_context(gridnova_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+                 db: Session = Depends(get_db)):
+    if not gridnova_session:
+        raise HTTPException(401, "Sign in to continue")
+    session = db.get(AccountSession, _token_digest(gridnova_session))
+    if not session:
+        raise HTTPException(401, "Session expired. Sign in again.")
+    expiry = session.expires_at
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    if expiry <= datetime.now(timezone.utc):
+        db.delete(session)
+        db.commit()
+        raise HTTPException(401, "Session expired. Sign in again.")
+    account = db.get(UserAccount, session.account_id)
+    if not account:
+        raise HTTPException(401, "Account unavailable")
+    return {"role": account.role, "household_id": account.household_id,
+            "account_id": account.id}
 
 def require_household(db: Session, household_id: int, ctx: dict):
     if ctx["role"] == "verifier":
         raise HTTPException(403, "Verifier role is review-only")
     if ctx["role"] != "admin" and ctx["household_id"] != household_id:
-        raise HTTPException(403, "Select this household in the demo household selector to act for it")
+        raise HTTPException(403, "You can only act for your signed-in household")
     h = db.get(Household, household_id)
     if not h:
         raise HTTPException(404, "Household not found")
@@ -153,7 +207,7 @@ def require_household(db: Session, household_id: int, ctx: dict):
 
 def require_reviewer(ctx: dict):
     if ctx["role"] not in {"verifier", "admin"}:
-        raise HTTPException(403, "This action requires the demo verifier role")
+        raise HTTPException(403, "This action requires a reviewer account")
 
 def seed(target_engine=engine):
     """Create or migrate and seed the supplied database."""
