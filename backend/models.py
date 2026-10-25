@@ -75,6 +75,16 @@ class AuditEvent(Base):
     details = Column(Text, nullable=False, default="{}")
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
+
+class TradeLedgerEntry(Base):
+    """Hash-linked trade event; SQLite remains the authoritative application store."""
+    __tablename__ = "trade_ledger_entries"
+    id = Column(Integer, primary_key=True)
+    event_json = Column(Text, nullable=False)
+    previous_hash = Column(String(64), nullable=False)
+    entry_hash = Column(String(64), nullable=False, unique=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
 class HouseholdSetting(Base):
     __tablename__ = "household_settings"
     id = Column(Integer, primary_key=True)
@@ -100,3 +110,4 @@ class AuthSession(Base):
     account_id = Column(Integer, ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
+
