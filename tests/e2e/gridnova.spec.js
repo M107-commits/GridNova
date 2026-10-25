@@ -28,7 +28,25 @@ test("desktop: separate buyer and seller accounts, trade ledger, settings, simul
   await signup(page, { name: "Asha Rao", home: "Rao Household", email: sellerEmail });
   await expect(page.locator("#sidenav [data-page]")).toHaveCount(7);
   await expect(page.locator("#role, #household")).toHaveCount(0);
+  await expect(page.locator("#problemTitle")).toContainText("Solar surplus and local demand");
   await expect(page.getByRole("img", { name: "Illustrative neighborhood generation and energy use" })).toBeVisible();
+  await page.locator("#startTour").click();
+  await expect(page.getByRole("dialog")).toContainText("Your household baseline");
+  const tourPages = [
+    ["overview", "1 · Your household baseline"],
+    ["market", "2 · List real app data as an offer"],
+    ["market", "3 · Explore a buyer journey"],
+    ["verification", "4 · Review records and impact"],
+    ["transactions", "5 · Follow the ledger"],
+  ];
+  for (let i = 0; i < tourPages.length; i++) {
+    const [destination, title] = tourPages[i];
+    await expect(page.getByRole("dialog")).toContainText(title);
+    await page.getByRole("button", { name: "Open this page" }).click();
+    await expect(page.locator("#" + destination)).toHaveClass(/active/);
+    await page.getByRole("button", { name: i === tourPages.length - 1 ? "Finish" : "Next step" }).click();
+  }
+  await expect(page.locator("#dialog")).toBeHidden();
 
   const seller = await page.evaluate(() => fetch("/api/auth/me").then(r => r.json()));
   await page.locator('#sidenav [data-page="my-energy"]').click();
@@ -112,3 +130,4 @@ test("mobile: account entry and navigation across all pages", async ({ page }, i
   }
   await expect(page.locator("body")).toContainText("GridNova is a simulation");
 });
+
