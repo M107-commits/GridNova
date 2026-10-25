@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import app
 from backend.database import Base, get_db
-from backend.models import Household, Offer, Trade, GenerationRecord, AuditEvent, UserAccount, AuthSession
+from backend.models import Household, Offer, Trade, TradeLedgerEntry, GenerationRecord, AuditEvent, UserAccount, AuthSession
 
 def household(name, generation, consumption, price=1200, share=True):
     return Household(name=name, city="Bengaluru", locality="Demo Block", source="solar",
@@ -111,6 +111,39 @@ def test_purchase_accounting_round_half_up_and_audit(client):
     assert any(e["action"] == "trade_purchased" for e in events)
     seller = next(h for h in client.get("/api/households").json() if h["id"] == 1)
     assert seller["surplus_wh"] == 3999
+
+def test_impact_formula_uses_completed_trade_energy_and_explains_assumptions(client):
+    data = client.get("/api/analytics").json()
+    assert data["estimated_co2_avoided_grams"] == 0
+    assert data["impact_method"]["estimate_only"] is True
+    assert "no external grid-emissions data source" in data["impact_method"]["factor_source"]
+    bought = client.post("/api/offers/1/purchase", headers=purchase_headers(2, "impact-trade-key-01"),
+                         json={"buyer_household_id": 2, "quantity_wh": 1000})
+    assert bought.status_code == 201
+    assert client.get("/api/analytics").json()["estimated_co2_avoided_grams"] == 550
+    client.post(f"/api/trades/{bought.json()['id']}/cancel", headers=owner(2))
+    assert client.get("/api/analytics").json()["estimated_co2_avoided_grams"] == 0
+
+def test_trade_ledger_hash_chain_tracks_purchase_and_cancellation(client):
+    assert client.get("/api/ledger/verify").json()["valid"] is True
+    first = client.post("/api/offers/1/purchase", headers=purchase_headers(2, "ledger-event-key-01"),
+                        json={"buyer_household_id": 2, "quantity_wh": 1000})
+    assert first.status_code == 201
+    checked = client.get("/api/ledger/verify").json()
+    assert checked["valid"] is True and checked["entry_count"] == 1
+    # A replay returns the stored purchase and does not append a duplicate event.
+    replay = client.post("/api/offers/1/purchase", headers=purchase_headers(2, "ledger-event-key-01"),
+                         json={"buyer_household_id": 2, "quantity_wh": 1000})
+    assert replay.status_code == 201
+    assert client.get("/api/ledger/verify").json()["entry_count"] == 1
+    cancelled = client.post(f"/api/trades/{first.json()['id']}/cancel", headers=owner(2))
+    assert cancelled.status_code == 200
+    assert client.get("/api/ledger/verify").json()["entry_count"] == 2
+    with client.test_session() as db:
+        entry = db.query(TradeLedgerEntry).order_by(TradeLedgerEntry.id).first()
+        entry.event_json = entry.event_json.replace('"quantity_wh":1000', '"quantity_wh":1001')
+        db.commit()
+    assert client.get("/api/ledger/verify").json()["valid"] is False
 
 def test_prevent_self_purchase_overselling_and_excess_demand(client):
     self_buy = client.post("/api/offers/1/purchase", headers=purchase_headers(1, "purchase-key-2"),
@@ -284,13 +317,16 @@ def test_cancel_is_single_transition_and_verifier_cannot_mutate_household(client
     assert seller["surplus_wh"] == 4000
 
 def test_global_reset_is_disabled_after_household_accounts_exist(client):
+    before = client.get("/api/offers").json()
     create = client.post("/api/offers", headers=owner(5),
         json={"household_id": 5, "quantity_wh": 500, "price_paise_per_kwh": 900})
     assert create.status_code == 201
     reset = client.post("/api/reset", headers=admin_headers())
     assert reset.status_code == 410
     assert len(client.get("/api/households").json()) == 1
-    assert len(client.get("/api/offers").json()) == 4
+    remaining = client.get("/api/offers").json()
+    assert len(remaining) == len(before) + 1
+    assert any(offer["id"] == create.json()["id"] for offer in remaining)
     assert client.post("/api/reset", headers=owner(1)).status_code == 403
 
 def test_purchase_commit_failure_rolls_back_trade_and_audit(client, monkeypatch):
@@ -367,7 +403,7 @@ def test_generation_rejection_is_audited_and_final(client):
     retry = client.post(f"/api/generation-records/{submitted.json()['id']}/verify",
         headers=reviewer, json={"note": "late"})
     assert retry.status_code == 409
-    events = client.get("/api/audit-events", headers={"X-Demo-Role": "admin"}).json()
+    events = client.get("/api/audit-events", headers=admin_headers()).json()
     assert any(event["action"] == "generation_rejected" for event in events)
 
 
@@ -447,3 +483,4 @@ def test_real_account_registration_login_logout_and_forged_role_headers(client):
     bad_login = client.post("/api/auth/login", json={
         "email": "asha@example.test", "password": "wrong-password"})
     assert bad_login.status_code == 401
+
