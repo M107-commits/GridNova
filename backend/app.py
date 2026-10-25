@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from .database import Base, SessionLocal, engine, get_db
-from .models import AuthSession, AuditEvent, GenerationRecord, Household, HouseholdSetting, Offer, Trade, UserAccount
+from .models import AuthSession, AuditEvent, GenerationRecord, Household, HouseholdSetting, Offer, Trade, TradeLedgerEntry, UserAccount
 from .schemas import (GenerationCreate, HouseholdEnergyUpdate, OfferCreate,
                       PurchaseRequest, ReviewRequest, SettingsUpdate,
                       SimulationRequest, SignupRequest, LoginRequest)
@@ -30,6 +30,30 @@ CITIES = [
     ("Meera Iyer", "Chennai", "Adyar", 6100, 4200, "solar"),
     ("Arjun Sharma", "Jaipur", "Malviya Nagar", 4900, 2600, "solar"),
 ]
+
+ILLUSTRATIVE_GRID_FACTOR_KGCO2E_PER_KWH = Decimal("0.55")
+LEDGER_GENESIS_HASH = "0" * 64
+
+def append_trade_event(db: Session, trade: Trade, event_type: str):
+    """Append an ordered SHA-256 link. This is tamper-evident, not blockchain."""
+    previous = db.scalar(select(TradeLedgerEntry).order_by(TradeLedgerEntry.id.desc()).limit(1))
+    previous_hash = previous.entry_hash if previous else LEDGER_GENESIS_HASH
+    event = {"event": event_type, "trade_id": trade.id, "offer_id": trade.offer_id,
+             "seller_id": trade.seller_id, "buyer_id": trade.buyer_id,
+             "quantity_wh": trade.quantity_wh, "price_paise_per_kwh": trade.price_paise_per_kwh,
+             "total_paise": trade.total_paise,
+             "occurred_at": (trade.cancelled_at or trade.created_at).isoformat()}
+    event_json = json.dumps(event, sort_keys=True, separators=(",", ":"))
+    entry_hash = hashlib.sha256((previous_hash + event_json).encode("utf-8")).hexdigest()
+    db.add(TradeLedgerEntry(event_json=event_json, previous_hash=previous_hash, entry_hash=entry_hash))
+
+def impact_method():
+    return {"estimate_only": True,
+            "formula": "completed simulated traded energy (kWh) × 0.55 kg CO₂e/kWh",
+            "factor_kgco2e_per_kwh": str(ILLUSTRATIVE_GRID_FACTOR_KGCO2E_PER_KWH),
+            "assumption": "Assumes each simulated kWh traded displaces one kWh of grid electricity.",
+            "factor_source": "Illustrative prototype assumption; no external grid-emissions data source is integrated.",
+            "limitations": "Not measured or verified impact; excludes timing, losses, marginal generation, and rebound effects."}
 
 def money_paise(quantity_wh: int, price_paise_per_kwh: int) -> int:
     value = Decimal(quantity_wh) * Decimal(price_paise_per_kwh) / Decimal(1000)
@@ -409,6 +433,9 @@ def dashboard(household_id: int | None = Query(default=None), ctx: dict = Depend
         raise HTTPException(404, "Household not found")
     all_homes = list(db.scalars(select(Household)))
     available = sum(current_available(db, h) for h in all_homes)
+    completed = list(db.scalars(select(Trade).where(Trade.status == "completed")))
+    traded_wh = sum(t.quantity_wh for t in completed)
+    co2_grams = int((Decimal(traded_wh) / Decimal(1000) * ILLUSTRATIVE_GRID_FACTOR_KGCO2E_PER_KWH * Decimal(1000)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
     # Keep dashboard activity derived from the persistent trade ledger.
     recent = []
     for t in db.scalars(select(Trade).order_by(Trade.created_at.desc()).limit(5)):
@@ -421,7 +448,9 @@ def dashboard(household_id: int | None = Query(default=None), ctx: dict = Depend
                    "consumption_wh": sum(h.consumption_wh for h in all_homes),
                    "available_surplus_wh": available, "households": len(all_homes),
                    "completed_trades": db.scalar(select(func.count(Trade.id)).where(Trade.status == "completed")) or 0,
-                   "estimated_co2_grams": int(sum(h.generation_wh for h in all_homes) * 0.55)},
+                   "estimated_co2_grams": co2_grams,
+                   "traded_wh": traded_wh,
+                   "impact_method": impact_method()},
         "recent_trades": recent,
     }
 
@@ -526,6 +555,7 @@ def purchase_offer(offer_id: int, payload: PurchaseRequest,
             price_paise_per_kwh=offer.price_paise_per_kwh, total_paise=total, status="completed")
         db.add(trade)
         db.flush()
+        append_trade_event(db, trade, "trade_created")
         audit(db, ctx["role"], "trade_purchased", "trade", trade.id, buyer.id,
               {"seller_id": seller.id, "offer_id": offer.id,
                "quantity_wh": payload.quantity_wh, "total_paise": total})
@@ -574,6 +604,7 @@ def cancel_trade(trade_id: int, ctx: dict = Depends(role_context), db: Session =
             raise HTTPException(409, "Only completed demo trades can be cancelled")
         trade.status = "cancelled"
         trade.cancelled_at = datetime.now(timezone.utc)
+        append_trade_event(db, trade, "trade_cancelled")
         audit(db, ctx["role"], "trade_cancelled", "trade", trade.id, ctx["household_id"],
               {"quantity_wh_released": trade.quantity_wh})
         seller, buyer = db.get(Household, trade.seller_id), db.get(Household, trade.buyer_id)
@@ -679,17 +710,34 @@ def analytics(db: Session = Depends(get_db)):
     homes = list(db.scalars(select(Household)))
     completed = list(db.scalars(select(Trade).where(Trade.status == "completed")))
     sold_wh = sum(t.quantity_wh for t in completed)
+    co2_grams = int((Decimal(sold_wh) / Decimal(1000) * ILLUSTRATIVE_GRID_FACTOR_KGCO2E_PER_KWH * Decimal(1000)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
     return {"simulation": True, "households": len(homes),
             "generation_wh": sum(h.generation_wh for h in homes),
             "consumption_wh": sum(h.consumption_wh for h in homes),
             "surplus_wh": sum(current_available(db, h) for h in homes),
             "traded_wh": sold_wh, "trade_count": len(completed),
             "transaction_value_paise": sum(t.total_paise for t in completed),
-            "estimated_co2_avoided_grams": int(sold_wh * 0.55),
+            "estimated_co2_avoided_grams": co2_grams,
+            "impact_method": impact_method(),
             "city_breakdown": [{"city": city,
                 "generation_wh": sum(h.generation_wh for h in homes if h.city == city),
                 "consumption_wh": sum(h.consumption_wh for h in homes if h.city == city)}
                 for city in sorted({h.city for h in homes})]}
+
+@app.get("/api/ledger/verify")
+def verify_trade_ledger(db: Session = Depends(get_db)):
+    """Verify hash links without returning household identifiers or event payloads."""
+    previous_hash = LEDGER_GENESIS_HASH
+    entries = list(db.scalars(select(TradeLedgerEntry).order_by(TradeLedgerEntry.id)))
+    valid = True
+    for entry in entries:
+        expected = hashlib.sha256((previous_hash + entry.event_json).encode("utf-8")).hexdigest()
+        if entry.previous_hash != previous_hash or not hmac.compare_digest(entry.entry_hash, expected):
+            valid = False
+        previous_hash = entry.entry_hash
+    return {"valid": valid, "entry_count": len(entries), "head_hash": previous_hash,
+            "algorithm": "SHA-256", "method": "ordered hash-linked trade event records",
+            "limitation": "Integrity check detects edits to this stored sequence; it is not blockchain and does not prevent a database owner from rewriting the whole chain."}
 
 @app.post("/api/simulations/run")
 def run_simulation(payload: SimulationRequest, ctx: dict = Depends(role_context),
@@ -778,3 +826,4 @@ def index():
     if path.exists():
         return FileResponse(path)
     return {"name": "GridNova API", "docs": "/docs", "simulation": True}
+
